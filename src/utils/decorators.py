@@ -1,5 +1,5 @@
 from functools import wraps
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message
 from config import Config
 
 def super_admin_only():
@@ -20,7 +20,7 @@ def admin_group_only():
         @wraps(func)
         async def wrapper(message: Message, *args, **kwargs):
             if message.chat.id != Config.ADMIN_GROUP_ID:
-                await message.reply("⛔ This command only works in admin group.")
+                # Don't reply if not in admin group
                 return
             return await func(message, *args, **kwargs)
         return wrapper
