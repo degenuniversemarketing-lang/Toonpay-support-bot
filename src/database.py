@@ -1,12 +1,15 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, Integer, String, DateTime, Text, BigInteger, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, BigInteger, Boolean, select
 from datetime import datetime
-import json
 from config import Config
+import asyncpg
 
 # Convert postgresql:// to postgresql+asyncpg://
-DATABASE_URL = Config.DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://')
+if Config.DATABASE_URL:
+    DATABASE_URL = Config.DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://')
+else:
+    raise ValueError("DATABASE_URL not set in environment variables")
 
 engine = create_async_engine(DATABASE_URL, echo=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -71,3 +74,8 @@ class BotCommand(Base):
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+async def init_db():
+    """Initialize database tables"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
