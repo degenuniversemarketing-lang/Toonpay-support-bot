@@ -1,6 +1,7 @@
 from aiogram import BaseMiddleware
 from aiogram.types import Message
 from typing import Callable, Dict, Any, Awaitable
+from sqlalchemy import select
 from database import get_db
 from models import AdminGroup
 
@@ -18,7 +19,6 @@ class GroupAuthMiddleware(BaseMiddleware):
         # Check if group is activated for support
         if event.chat.type in ['group', 'supergroup']:
             async for session in get_db():
-                from sqlalchemy import select
                 result = await session.execute(
                     select(AdminGroup).where(
                         AdminGroup.group_id == event.chat.id,
