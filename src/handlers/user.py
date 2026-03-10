@@ -3,6 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy import select
 from database import get_db
 from models import User, Ticket
 from keyboards.user_keyboards import *
@@ -26,7 +27,11 @@ async def cmd_start(message: Message, state: FSMContext):
     
     # Save or update user in database
     async for session in get_db():
-        user = await session.get(User, message.from_user.id)
+        result = await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        user = result.scalar_one_or_none()
+        
         if not user:
             user = User(
                 telegram_id=message.from_user.id,
@@ -53,7 +58,7 @@ I'm here to help you with any issues you might have.
 
 Click the button below to start!
 """
-    await message.reply(welcome_text, reply_markup=get_main_menu_keyboard())
+    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
 
 @router.callback_query(F.data == "new_ticket")
 async def new_ticket(callback: CallbackQuery, state: FSMContext):
@@ -82,7 +87,7 @@ async def name_entered(message: Message, state: FSMContext):
     """Handle name input"""
     await state.update_data(name=message.text)
     
-    await message.reply(
+    await message.answer(
         "📧 <b>Please enter your email address:</b>\n\n"
         "Example: user@example.com",
         reply_markup=get_cancel_keyboard()
@@ -94,7 +99,7 @@ async def email_entered(message: Message, state: FSMContext):
     """Handle email input"""
     await state.update_data(email=message.text)
     
-    await message.reply(
+    await message.answer(
         "📱 <b>Please enter your phone number:</b>\n\n"
         "Example: +1234567890",
         reply_markup=get_cancel_keyboard()
@@ -106,7 +111,7 @@ async def phone_entered(message: Message, state: FSMContext):
     """Handle phone input"""
     await state.update_data(phone=message.text)
     
-    await message.reply(
+    await message.answer(
         "📝 <b>Please describe your issue in detail:</b>\n\n"
         "Include all relevant information to help us assist you better.",
         reply_markup=get_cancel_keyboard()
@@ -135,6 +140,7 @@ async def description_entered(message: Message, state: FSMContext):
         )
         session.add(ticket)
         await session.commit()
+        await session.refresh(ticket)
         
         # Send to admin group
         from bot import bot
@@ -150,6 +156,9 @@ async def description_entered(message: Message, state: FSMContext):
             'created_at': ticket.created_at
         })
         
+        # Import here to avoid circular import
+        from keyboards.admin_keyboards import get_ticket_action_keyboard
+        
         sent_message = await bot.send_message(
             Config.ADMIN_GROUP_ID,
             admin_message,
@@ -160,7 +169,7 @@ async def description_entered(message: Message, state: FSMContext):
         ticket.admin_group_message_id = sent_message.message_id
         await session.commit()
     
-    await message.reply(
+    await message.answer(
         f"✅ <b>Ticket Created Successfully!</b>\n\n"
         f"Your ticket ID: <code>{ticket_id}</code>\n\n"
         f"We'll get back to you within 24 hours.\n"
@@ -176,5 +185,61 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
         "❌ Action cancelled. What would you like to do?",
+        reply_markup=get_main_menu_keyboard()
+    )
+
+@router.callback_query(F.data == "my_tickets")
+async def my_tickets(callback: CallbackQuery):
+    """Show user's tickets"""
+    async for session in get_db():
+        result = await session.execute(
+            select(Ticket).where(Ticket.user_id == callback.from_user.id)
+        )
+        tickets = result.scalars().all()
+        
+        if not tickets:
+            await callback.message.edit_text(
+                "📭 You haven't created any tickets yet.",
+                reply_markup=get_main_menu_keyboard()
+            )
+            return
+        
+        response = "📋 <b>Your Tickets:</b>\n\n"
+        for ticket in tickets[-5:]:  # Show last 5 tickets
+            status_emoji = '🟢' if ticket.status == 'open' else '🟡' if ticket.status == 'in_progress' else '🔴'
+            response += f"{status_emoji} <code>{ticket.ticket_id}</code> - {ticket.category}\n"
+            response += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+            if ticket.admin_answer:
+                response += f"   ✓ Answered\n"
+            response += "\n"
+        
+        await callback.message.edit_text(
+            response,
+            reply_markup=get_main_menu_keyboard()
+        )
+
+@router.callback_query(F.data == "help")
+async def help_command(callback: CallbackQuery):
+    """Show help message"""
+    help_text = """
+ℹ️ <b>Help & Support</b>
+
+<b>How to create a ticket:</b>
+1. Click "New Ticket"
+2. Select category
+3. Provide your details
+4. Describe your issue
+5. Submit
+
+<b>Important Notes:</b>
+• Each ticket is for one issue only
+• Tickets close after admin reply
+• Create new ticket for new questions
+• Response Time: Within 24 hours 🚀
+
+Need immediate assistance? Contact @ToonPaySupport
+"""
+    await callback.message.edit_text(
+        help_text,
         reply_markup=get_main_menu_keyboard()
     )
