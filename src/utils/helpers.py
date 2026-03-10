@@ -3,8 +3,6 @@ import string
 import pandas as pd
 from datetime import datetime
 import io
-from aiogram.types import FSInputFile
-import aiofiles
 
 def generate_ticket_id():
     """Generate unique ticket ID"""
@@ -12,7 +10,7 @@ def generate_ticket_id():
     random_chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
     return f"TKT-{timestamp}-{random_chars}"
 
-def format_ticket_for_admin(ticket: dict, user_info: dict = None):
+def format_ticket_for_admin(ticket: dict):
     """Format ticket message for admin group"""
     status_emoji = {
         'open': '🟢',
