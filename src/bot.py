@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config import Config
-from database import engine, Base
+from database import init_db
 from middlewares.auth import GroupAuthMiddleware
 
 # Import handlers
@@ -14,7 +15,10 @@ from handlers import user, admin, super_admin, group
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -35,20 +39,22 @@ dp.include_router(group.router)
 dp.include_router(admin.router)
 dp.include_router(super_admin.router)
 
-async def create_tables():
-    """Create database tables"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created")
-
 async def main():
     """Main function"""
-    # Create tables
-    await create_tables()
+    # Initialize database
+    await init_db()
+    logger.info("Database initialized")
     
     # Start polling
     logger.info("Starting bot...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        logger.info("Bot stopped")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
