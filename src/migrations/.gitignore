@@ -1,1 +1,9 @@
-
+.env
+__pycache__/
+*.pyc
+*.db
+*.log
+instance/
+.railway/
+*.xlsx
+*.csv
