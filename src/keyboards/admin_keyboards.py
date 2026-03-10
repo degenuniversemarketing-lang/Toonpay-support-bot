@@ -8,8 +8,7 @@ def get_ticket_action_keyboard(ticket_id: str):
             InlineKeyboardButton(text="🟡 In Progress", callback_data=f"progress_{ticket_id}")
         ],
         [
-            InlineKeyboardButton(text="🔴 Close", callback_data=f"close_{ticket_id}"),
-            InlineKeyboardButton(text="📝 View", callback_data=f"view_{ticket_id}")
+            InlineKeyboardButton(text="🔴 Close", callback_data=f"close_{ticket_id}")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
