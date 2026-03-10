@@ -3,14 +3,13 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy import select, or_
 from database import get_db
 from models import Ticket, User
 from keyboards.admin_keyboards import get_ticket_action_keyboard
 from utils.decorators import admin_group_only
 from config import Config
-import pandas as pd
 from datetime import datetime
-import io
 
 router = Router()
 
@@ -38,7 +37,6 @@ async def admin_reply_send(message: Message, state: FSMContext):
     
     async for session in get_db():
         # Get ticket
-        from sqlalchemy import select
         result = await session.execute(
             select(Ticket).where(Ticket.ticket_id == ticket_id)
         )
@@ -81,7 +79,6 @@ async def ticket_in_progress(callback: CallbackQuery):
     ticket_id = callback.data.replace("progress_", "")
     
     async for session in get_db():
-        from sqlalchemy import select
         result = await session.execute(
             select(Ticket).where(Ticket.ticket_id == ticket_id)
         )
@@ -109,7 +106,6 @@ async def ticket_close(callback: CallbackQuery):
     ticket_id = callback.data.replace("close_", "")
     
     async for session in get_db():
-        from sqlalchemy import select
         result = await session.execute(
             select(Ticket).where(Ticket.ticket_id == ticket_id)
         )
@@ -149,8 +145,6 @@ async def search_user(message: Message):
         return
     
     async for session in get_db():
-        from sqlalchemy import or_, select
-        
         # Search users
         query = select(User).where(
             or_(
@@ -168,7 +162,7 @@ async def search_user(message: Message):
         
         for user in users:
             # Get user's tickets
-            tickets_query = select(Ticket).where(Ticket.user_id == user.telegram_id)
+            tickets_query = select(Ticket).where(Ticket.user_id == user.telegram_id).order_by(Ticket.created_at.desc())
             tickets_result = await session.execute(tickets_query)
             tickets = tickets_result.scalars().all()
             
