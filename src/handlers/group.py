@@ -9,7 +9,7 @@ router = Router()
 
 @router.message(F.chat.type.in_({'group', 'supergroup'}), Command("support"))
 async def group_support(message: Message):
-    """Handle /support command in groups"""
+    """Handle /support command in groups - ONLY command that works in groups"""
     # Check if bot is activated in this group
     async for session in get_db():
         result = await session.execute(
@@ -37,6 +37,14 @@ async def group_support(message: Message):
     await message.reply(
         "🎫 <b>Need help from ToonPay Support?</b>\n\n"
         "Click the button below to open a private chat with our support bot and create a ticket.\n\n"
-        "⏱️ Response time: Within 24 hours",
+        "⏱️ <b>ToonPay Support Available 24/7</b>",
         reply_markup=support_button
     )
+
+# Ignore all other commands in groups
+@router.message(F.chat.type.in_({'group', 'supergroup'}))
+async def ignore_other_commands(message: Message):
+    """Ignore all other commands in groups - only /support works"""
+    if message.text and message.text.startswith('/'):
+        # Silently ignore - don't respond
+        return
