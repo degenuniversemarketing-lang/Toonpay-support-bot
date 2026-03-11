@@ -1,415 +1,429 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select, or_, and_
-from database import get_db
-from database import Ticket, User
-from keyboards.admin_keyboards import get_ticket_action_keyboard
-from utils.decorators import admin_group_only
-from config import Config
-from datetime import datetime
+# src/handlers/admin.py
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler
 import logging
+from datetime import datetime
 
-router = Router()
+from src.database import db
+from src.config import config
+from src.keyboards import get_filter_keyboard, get_ticket_action_keyboard
+from src.utils import (
+    format_ticket_info, format_user_info, format_ticket_list,
+    format_statistics, format_user_statistics, escape_html
+)
+
 logger = logging.getLogger(__name__)
 
-class AdminReply(StatesGroup):
-    waiting_for_reply = State()
+# Conversation states
+REPLY_TEXT = 0
+SEARCH_QUERY = 1
 
-@router.callback_query(F.data.startswith("reply_"))
-async def admin_reply_start(callback: CallbackQuery, state: FSMContext):
-    """Start admin reply process - WORKING VERSION"""
-    ticket_id = callback.data.replace("reply_", "")
-    await state.update_data(ticket_id=ticket_id)
-    await state.update_data(chat_id=callback.message.chat.id)
-    await state.update_data(message_id=callback.message.message_id)
+class AdminHandlers:
     
-    await callback.message.edit_text(
-        f"✏️ Type your reply for ticket {ticket_id}:\n"
-        "(or /cancel to cancel)",
-        reply_markup=None
-    )
-    await state.set_state(AdminReply.waiting_for_reply)
-    await callback.answer("Please type your reply")
-
-@router.message(AdminReply.waiting_for_reply)
-async def admin_reply_send(message: Message, state: FSMContext):
-    """Send admin reply to user - WORKING VERSION"""
-    data = await state.get_data()
-    ticket_id = data.get('ticket_id')
-    original_chat_id = data.get('chat_id')
-    original_message_id = data.get('message_id')
-    
-    if not ticket_id:
-        await message.reply("❌ No ticket ID found. Please try again.")
-        await state.clear()
-        return
-    
-    async for session in get_db():
-        # Get ticket
-        result = await session.execute(
-            select(Ticket).where(Ticket.ticket_id == ticket_id)
-        )
-        ticket = result.scalar_one_or_none()
+    @staticmethod
+    async def check_admin(update: Update) -> bool:
+        """Check if user is admin and in admin group"""
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
         
-        if not ticket:
-            await message.reply(f"❌ Ticket {ticket_id} not found")
-            await state.clear()
+        # Check if in admin group
+        if chat_id != config.ADMIN_GROUP_ID:
+            return False
+        
+        # Check if user is admin
+        return db.is_admin(user_id)
+    
+    @staticmethod
+    async def tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /tickets command"""
+        if not await AdminHandlers.check_admin(update):
             return
         
-        # Update ticket
-        ticket.admin_answer = message.text
-        ticket.answered_by = message.from_user.id
-        ticket.answered_at = datetime.utcnow()
-        ticket.status = 'closed'
+        tickets = db.get_tickets_by_status('open')
         
-        await session.commit()
+        if tickets:
+            text = format_ticket_list(tickets, "📋 Open Tickets")
+        else:
+            text = "📭 No open tickets at the moment."
         
-        # Send reply to user
-        try:
-            await message.bot.send_message(
-                ticket.user_id,
-                f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n"
-                f"<b>Support Team:</b>\n{message.text}\n\n"
-                f"<i>This ticket is now closed. ToonPay Support available 24/7.</i>"
-            )
-            logger.info(f"Reply sent to user {ticket.user_id}")
-        except Exception as e:
-            logger.error(f"Failed to send to user: {e}")
-            await message.reply("⚠️ Reply saved but user may have blocked the bot.")
-        
-        # Update admin group message
-        try:
-            admin_username = message.from_user.username or f"Admin {message.from_user.id}"
-            
-            # Get user info
-            user_result = await session.execute(
-                select(User).where(User.telegram_id == ticket.user_id)
-            )
-            user = user_result.scalar_one_or_none()
-            user_display = user.first_name if user else "User"
-            
-            updated_text = f"""
-<b>✅ Ticket {ticket_id} - Closed</b>
-
-<b>👤 User:</b> {user_display}
-<b>📧 Email:</b> {ticket.email}
-<b>📱 Phone:</b> {ticket.phone}
-
-<b>📝 Issue:</b>
-{ticket.description}
-
-<b>💬 Reply sent by:</b> @{admin_username}
-<b>📨 Reply:</b> {message.text}
-
-<b>📅 Closed:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}
-"""
-            
-            await message.bot.edit_message_text(
-                chat_id=original_chat_id or Config.ADMIN_GROUP_ID,
-                message_id=original_message_id,
-                text=updated_text,
-                reply_markup=None
-            )
-        except Exception as e:
-            logger.error(f"Failed to update admin message: {e}")
-        
-        await message.reply(f"✅ Reply sent for ticket {ticket_id}")
-    
-    await state.clear()
-
-@router.callback_query(F.data.startswith("progress_"))
-async def ticket_in_progress(callback: CallbackQuery):
-    """Mark ticket as in progress"""
-    ticket_id = callback.data.replace("progress_", "")
-    
-    async for session in get_db():
-        result = await session.execute(
-            select(Ticket).where(Ticket.ticket_id == ticket_id)
+        await update.message.reply_text(
+            text,
+            reply_markup=get_filter_keyboard(),
+            parse_mode='HTML'
         )
-        ticket = result.scalar_one_or_none()
+    
+    @staticmethod
+    async def data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /data command - show statistics"""
+        if not await AdminHandlers.check_admin(update):
+            return
         
-        if ticket:
-            ticket.status = 'in_progress'
-            ticket.in_progress_by = callback.from_user.id
-            ticket.in_progress_at = datetime.utcnow()
-            await session.commit()
-            
-            admin_username = callback.from_user.username or f"Admin {callback.from_user.id}"
-            
-            await callback.message.edit_text(
-                f"{callback.message.text}\n\n"
-                f"🟡 <b>Status: In Progress</b>\n"
-                f"By: @{admin_username}\n"
-                f"Started: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
-                reply_markup=get_ticket_action_keyboard(ticket_id)
-            )
-            
-            await callback.answer("Ticket marked as in progress")
-
-@router.callback_query(F.data.startswith("close_"))
-async def ticket_close(callback: CallbackQuery):
-    """Close ticket without reply"""
-    ticket_id = callback.data.replace("close_", "")
-    
-    async for session in get_db():
-        result = await session.execute(
-            select(Ticket).where(Ticket.ticket_id == ticket_id)
-        )
-        ticket = result.scalar_one_or_none()
+        stats = db.get_statistics()
+        text = format_statistics(stats)
         
-        if ticket:
-            ticket.status = 'closed'
-            ticket.answered_by = callback.from_user.id
-            ticket.answered_at = datetime.utcnow()
-            await session.commit()
-            
-            admin_username = callback.from_user.username or f"Admin {callback.from_user.id}"
-            
-            # Notify user
-            try:
-                await callback.bot.send_message(
-                    ticket.user_id,
-                    f"🔴 <b>Ticket #{ticket_id} Closed</b>\n\n"
-                    f"Your ticket has been closed by support team.\n"
-                    f"Create a new ticket if you need further assistance.\n\n"
-                    f"⏱️ ToonPay Support Available 24/7"
-                )
-            except:
-                pass
-            
-            # Update admin message
-            await callback.message.edit_text(
-                f"🔴 <b>Ticket {ticket_id} - Closed by @{admin_username}</b>\n\n"
-                f"{callback.message.text}",
-                reply_markup=None
-            )
-            
-            await callback.answer("Ticket closed")
-
-@router.message(Command("search"))
-@admin_group_only()
-async def enhanced_search_user(message: Message):
-    """Enhanced search with user details and ticket management"""
-    search_term = message.text.replace("/search", "").strip()
-    
-    if not search_term:
-        await message.reply("Usage: /search <username/email/user_id/phone>")
-        return
-    
-    async for session in get_db():
-        # Search users
-        query = select(User).where(
-            or_(
-                User.username.ilike(f"%{search_term}%"),
-                User.email.ilike(f"%{search_term}%"),
-                User.telegram_id == (int(search_term) if search_term.isdigit() else 0),
-                User.phone.ilike(f"%{search_term}%"),
-                User.first_name.ilike(f"%{search_term}%"),
-                User.last_name.ilike(f"%{search_term}%")
-            )
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML'
         )
-        result = await session.execute(query)
-        users = result.scalars().all()
+    
+    @staticmethod
+    async def getdata(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /getdata command - search users"""
+        if not await AdminHandlers.check_admin(update):
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /getdata <user_id or username or email or phone>"
+            )
+            return
+        
+        search_term = ' '.join(context.args)
+        users = db.search_users(search_term)
         
         if not users:
-            await message.reply("❌ No users found")
+            await update.message.reply_text("❌ No user found.")
             return
         
         for user in users:
-            # Get user's tickets
-            tickets_query = select(Ticket).where(Ticket.user_id == user.telegram_id).order_by(Ticket.created_at.desc())
-            tickets_result = await session.execute(tickets_query)
-            tickets = tickets_result.scalars().all()
+            # Get user tickets
+            tickets = db.get_user_tickets(user.user_id, limit=10)
+            stats = db.get_user_statistics(user.user_id)
             
-            # Calculate statistics
-            total_tickets = len(tickets)
-            open_tickets = sum(1 for t in tickets if t.status == 'open')
-            in_progress = sum(1 for t in tickets if t.status == 'in_progress')
-            replied_closed = sum(1 for t in tickets if t.status == 'closed' and t.admin_answer is not None)
-            closed_no_reply = sum(1 for t in tickets if t.status == 'closed' and t.admin_answer is None)
+            text = format_user_info(user)
+            text += format_user_statistics(user.user_id, stats)
             
-            response = f"""
-<b>👤 User Found:</b>
-• ID: <code>{user.telegram_id}</code>
-• Username: @{user.username if user.username else 'N/A'}
-• Name: {user.first_name} {user.last_name or ''}
-• Email: {user.email or 'Not provided'}
-• Phone: {user.phone or 'Not provided'}
-• Registered: {user.registered_at.strftime('%Y-%m-%d %H:%M')}
+            if tickets:
+                text += "\n📋 <b>Recent Tickets:</b>\n"
+                for ticket in tickets[:5]:
+                    status_emoji = config.STATUS_EMOJIS.get(ticket.status, '⚪')
+                    category_info = config.CATEGORIES.get(ticket.category, {'emoji': '📌'})
+                    text += f"\n{status_emoji} <code>{ticket.ticket_id}</code> {category_info['emoji']}"
+                    text += f"\n   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}"
+                    if ticket.admin_reply:
+                        text += f"\n   ✅ Replied"
+                    text += "\n"
+            
+            await update.message.reply_text(
+                text,
+                parse_mode='HTML'
+            )
+    
+    @staticmethod
+    async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /reply command"""
+        if not await AdminHandlers.check_admin(update):
+            return
+        
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "Usage: /reply <ticket_id> <your reply message>"
+            )
+            return
+        
+        ticket_id = context.args[0]
+        reply_text = ' '.join(context.args[1:])
+        
+        ticket = db.get_ticket(ticket_id)
+        if not ticket:
+            await update.message.reply_text("❌ Ticket not found.")
+            return
+        
+        # Save reply
+        db.reply_to_ticket(ticket_id, reply_text, update.effective_user.id)
+        
+        # Send reply to user
+        try:
+            user_message = f"""
+📬 <b>Reply to your ticket #{ticket_id}</b>
 
-<b>📊 Statistics:</b>
-• Total Tickets: {total_tickets}
-• 🟢 Open: {open_tickets}
-• 🟡 In Progress: {in_progress}
-• ✅ Replied & Closed: {replied_closed}
-• 🔴 Closed without reply: {closed_no_reply}
+<b>Support Team:</b>
+{escape_html(reply_text)}
 
-<b>📋 Recent Tickets:</b>
+This ticket is now closed. Create a new ticket for any other questions.
+
+{config.SUPPORT_MESSAGE}
 """
-            for ticket in tickets[:5]:
-                status_emoji = '🟢' if ticket.status == 'open' else '🟡' if ticket.status == 'in_progress' else '🔴'
-                
-                # Generate message link
-                link_text = ""
-                if ticket.admin_group_message_id:
-                    message_link = f"https://t.me/c/{str(Config.ADMIN_GROUP_ID).replace('-100', '')}/{ticket.admin_group_message_id}"
-                    link_text = f"<a href='{message_link}'>📎 View</a>"
-                
-                response += f"\n{status_emoji} <code>{ticket.ticket_id}</code> - {ticket.category}\n"
-                response += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                response += f"   <b>Q:</b> {ticket.description[:50]}...\n"
-                
-                if ticket.status == 'in_progress':
-                    response += f"   🟡 In Progress by: Admin {ticket.in_progress_by}\n"
-                elif ticket.status == 'closed' and ticket.admin_answer:
-                    response += f"   ✅ Reply: {ticket.admin_answer[:50]}...\n"
-                
-                if link_text:
-                    response += f"   {link_text}\n"
+            await context.bot.send_message(
+                chat_id=ticket.user_id,
+                text=user_message,
+                parse_mode='HTML'
+            )
             
-            await message.reply(response)
-
-@router.message(Command("tickets"))
-@admin_group_only()
-async def enhanced_tickets_list(message: Message):
-    """Enhanced tickets list with links and detailed status"""
-    async for session in get_db():
-        # Get all tickets
-        result = await session.execute(
-            select(Ticket).order_by(Ticket.created_at.desc())
+            # Log action
+            db.log_action(
+                update.effective_user.id,
+                'reply_ticket',
+                {'ticket_id': ticket_id, 'user_id': ticket.user_id}
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to send reply to user: {e}")
+        
+        await update.message.reply_text(
+            f"✅ Reply sent for ticket {ticket_id}"
         )
-        tickets = result.scalars().all()
-        
-        if not tickets:
-            await message.reply("📭 No tickets found")
+    
+    @staticmethod
+    async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /search command"""
+        if not await AdminHandlers.check_admin(update):
             return
         
-        # Separate by status
-        in_progress = [t for t in tickets if t.status == 'in_progress']
-        open_tickets = [t for t in tickets if t.status == 'open']
-        closed_tickets = [t for t in tickets if t.status == 'closed']
+        await update.message.reply_text(
+            "🔍 <b>Enter search term</b> (user ID, username, email, or phone):",
+            parse_mode='HTML'
+        )
+        return SEARCH_QUERY
+    
+    @staticmethod
+    async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle search query"""
+        if not await AdminHandlers.check_admin(update):
+            return ConversationHandler.END
         
-        response = "<b>📋 TICKETS OVERVIEW</b>\n\n"
+        query = update.message.text.strip()
+        users = db.search_users(query)
         
-        # In Progress Tickets
-        if in_progress:
-            response += "<b>🟡 IN PROGRESS:</b>\n"
-            for ticket in in_progress[:5]:
-                user_result = await session.execute(
-                    select(User).where(User.telegram_id == ticket.user_id)
-                )
-                user = user_result.scalar_one_or_none()
-                username = f"@{user.username}" if user and user.username else ticket.name
-                
-                # Generate clickable link
-                if ticket.admin_group_message_id:
-                    link = f"https://t.me/c/{str(Config.ADMIN_GROUP_ID).replace('-100', '')}/{ticket.admin_group_message_id}"
-                    response += f"   • <a href='{link}'><code>{ticket.ticket_id}</code></a> - {ticket.category}\n"
-                else:
-                    response += f"   • <code>{ticket.ticket_id}</code> - {ticket.category}\n"
-                
-                response += f"     👤 {username}\n"
-                response += f"     📅 {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                response += f"     🟡 By: Admin {ticket.in_progress_by}\n"
-                response += f"     💬 {ticket.description[:50]}...\n\n"
+        if not users:
+            await update.message.reply_text("❌ No users found.")
+            return ConversationHandler.END
         
-        # Open Tickets
-        if open_tickets:
-            response += "<b>🟢 OPEN:</b>\n"
-            for ticket in open_tickets[:5]:
-                user_result = await session.execute(
-                    select(User).where(User.telegram_id == ticket.user_id)
-                )
-                user = user_result.scalar_one_or_none()
-                username = f"@{user.username}" if user and user.username else ticket.name
-                
-                response += f"   • <code>{ticket.ticket_id}</code> - {ticket.category}\n"
-                response += f"     👤 {username}\n"
-                response += f"     📅 {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                response += f"     💬 {ticket.description[:50]}...\n\n"
+        for user in users:
+            tickets = db.get_user_tickets(user.user_id, limit=5)
+            stats = db.get_user_statistics(user.user_id)
+            
+            text = format_user_info(user)
+            text += format_user_statistics(user.user_id, stats)
+            
+            if tickets:
+                text += "\n📋 <b>Recent Tickets:</b>\n"
+                for ticket in tickets:
+                    status_emoji = config.STATUS_EMOJIS.get(ticket.status, '⚪')
+                    text += f"\n{status_emoji} <code>{ticket.ticket_id}</code>"
+                    text += f"\n   Q: {escape_html(ticket.question[:50])}..."
+                    if ticket.admin_reply:
+                        text += f"\n   A: {escape_html(ticket.admin_reply[:50])}..."
+                    text += "\n"
+            
+            await update.message.reply_text(
+                text,
+                parse_mode='HTML'
+            )
         
-        # Recently Closed
-        if closed_tickets:
-            response += "<b>🔴 RECENTLY CLOSED:</b>\n"
-            for ticket in closed_tickets[:3]:
-                user_result = await session.execute(
-                    select(User).where(User.telegram_id == ticket.user_id)
-                )
-                user = user_result.scalar_one_or_none()
-                username = f"@{user.username}" if user and user.username else ticket.name
-                
-                status = "✅ Replied" if ticket.admin_answer else "🔴 No reply"
-                response += f"   • <code>{ticket.ticket_id}</code> - {ticket.category} ({status})\n"
-                response += f"     👤 {username}\n"
-                response += f"     Closed: {ticket.answered_at.strftime('%Y-%m-%d %H:%M') if ticket.answered_at else 'N/A'}\n\n"
+        return ConversationHandler.END
+    
+    @staticmethod
+    async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle admin callback queries"""
+        query = update.callback_query
+        await query.answer()
         
-        # Split long messages
-        if len(response) > 4000:
-            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for part in parts:
-                await message.reply(part)
-        else:
-            await message.reply(response)
-
-@router.message(Command("reply"))
-@admin_group_only()
-async def reply_by_command(message: Message):
-    """Reply to ticket using command: /reply TICKET_ID Your message"""
-    try:
-        text = message.text.replace("/reply", "").strip()
-        parts = text.split(maxsplit=1)
-        
-        if len(parts) != 2:
-            await message.reply("❌ Usage: /reply TICKET_ID Your reply message")
+        user_id = update.effective_user.id
+        if not db.is_admin(user_id):
+            await query.edit_message_text("❌ You are not authorized.")
             return
         
-        ticket_id, reply_text = parts
+        data = query.data
         
-        async for session in get_db():
-            result = await session.execute(
-                select(Ticket).where(Ticket.ticket_id == ticket_id)
-            )
-            ticket = result.scalar_one_or_none()
+        if data.startswith('inprogress_'):
+            ticket_id = data.replace('inprogress_', '')
+            db.update_ticket_status(ticket_id, 'in_progress', user_id)
             
-            if not ticket:
-                await message.reply(f"❌ Ticket {ticket_id} not found")
-                return
-            
-            # Update ticket
-            ticket.admin_answer = reply_text
-            ticket.answered_by = message.from_user.id
-            ticket.answered_at = datetime.utcnow()
-            ticket.status = 'closed'
-            
-            await session.commit()
-            
-            # Send to user
-            await message.bot.send_message(
-                ticket.user_id,
-                f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n"
-                f"<b>Support Team:</b>\n{reply_text}\n\n"
-                f"<i>This ticket is now closed. ToonPay Support available 24/7.</i>"
+            await query.edit_message_text(
+                f"✅ Ticket {ticket_id} marked as in progress."
             )
             
-            # Update admin message
-            if ticket.admin_group_message_id:
+            # Update original message
+            await AdminHandlers.update_ticket_message(context, ticket_id)
+            
+            # Log action
+            db.log_action(user_id, 'mark_in_progress', {'ticket_id': ticket_id})
+        
+        elif data.startswith('close_'):
+            ticket_id = data.replace('close_', '')
+            ticket = db.get_ticket(ticket_id)
+            
+            if ticket:
+                db.close_ticket_no_reply(ticket_id, user_id)
+                
+                # Notify user
                 try:
-                    admin_username = message.from_user.username or f"Admin {message.from_user.id}"
-                    await message.bot.edit_message_text(
-                        chat_id=Config.ADMIN_GROUP_ID,
-                        message_id=ticket.admin_group_message_id,
-                        text=f"✅ <b>Ticket {ticket_id} - Closed</b>\n\n"
-                             f"<b>Reply sent by:</b> @{admin_username}\n"
-                             f"<b>Reply:</b> {reply_text}",
-                        reply_markup=None
+                    await context.bot.send_message(
+                        chat_id=ticket.user_id,
+                        text=f"""
+🔴 <b>Ticket #{ticket_id} Closed</b>
+
+Your ticket has been closed. If you still need assistance, please create a new ticket.
+
+{config.SUPPORT_MESSAGE}
+""",
+                        parse_mode='HTML'
                     )
                 except:
                     pass
+                
+                await query.edit_message_text(
+                    f"✅ Ticket {ticket_id} closed without reply."
+                )
+                
+                # Log action
+                db.log_action(user_id, 'close_no_reply', {'ticket_id': ticket_id})
+        
+        elif data.startswith('reply_'):
+            ticket_id = data.replace('reply_', '')
+            context.user_data['reply_ticket_id'] = ticket_id
             
-            await message.reply(f"✅ Reply sent for ticket {ticket_id}")
+            await query.edit_message_text(
+                f"📝 <b>Enter your reply for ticket {ticket_id}:</b>\n\n"
+                f"(or /cancel to cancel)",
+                parse_mode='HTML'
+            )
+            return REPLY_TEXT
+        
+        elif data.startswith('viewuser_'):
+            ticket_id = data.replace('viewuser_', '')
+            ticket = db.get_ticket(ticket_id)
             
-    except Exception as e:
-        await message.reply(f"❌ Error: {str(e)}")
+            if ticket:
+                user = db.get_user(ticket.user_id)
+                if user:
+                    tickets = db.get_user_tickets(user.user_id, limit=5)
+                    stats = db.get_user_statistics(user.user_id)
+                    
+                    text = format_user_info(user)
+                    text += format_user_statistics(user.user_id, stats)
+                    
+                    if tickets:
+                        text += "\n📋 <b>Recent Tickets:</b>\n"
+                        for t in tickets:
+                            status_emoji = config.STATUS_EMOJIS.get(t.status, '⚪')
+                            text += f"\n{status_emoji} <code>{t.ticket_id}</code>"
+                            text += f"\n   Created: {t.created_at.strftime('%Y-%m-%d %H:%M')}"
+                            if t.status == 'open':
+                                text += f"\n   [Reply to this ticket]"
+                            text += "\n"
+                    
+                    keyboard = [[
+                        InlineKeyboardButton("🔙 Back", callback_data=f'back_to_ticket_{ticket_id}')
+                    ]]
+                    
+                    await query.edit_message_text(
+                        text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode='HTML'
+                    )
+        
+        elif data.startswith('back_to_ticket_'):
+            ticket_id = data.replace('back_to_ticket_', '')
+            ticket = db.get_ticket(ticket_id)
+            
+            if ticket:
+                text = format_ticket_info(ticket, include_admin=True)
+                await query.edit_message_text(
+                    text,
+                    reply_markup=get_ticket_action_keyboard(ticket_id, ticket.status),
+                    parse_mode='HTML'
+                )
+        
+        elif data.startswith('filter_'):
+            filter_type = data.replace('filter_', '')
+            
+            if filter_type == 'all':
+                tickets = db.get_all_tickets(limit=50)
+                title = "📋 All Tickets (Last 50)"
+            elif filter_type == 'open':
+                tickets = db.get_tickets_by_status('open', limit=50)
+                title = "🟢 Open Tickets"
+            elif filter_type == 'in_progress':
+                tickets = db.get_tickets_by_status('in_progress', limit=50)
+                title = "🟡 In Progress Tickets"
+            elif filter_type == 'replied_closed':
+                tickets = db.get_tickets_by_status('replied_closed', limit=50)
+                title = "✅ Replied & Closed Tickets"
+            elif filter_type == 'closed_no_reply':
+                tickets = db.get_tickets_by_status('closed_no_reply', limit=50)
+                title = "🔴 Closed (No Reply) Tickets"
+            else:
+                return
+            
+            text = format_ticket_list(tickets, title)
+            await query.edit_message_text(
+                text,
+                reply_markup=get_filter_keyboard(),
+                parse_mode='HTML'
+            )
+    
+    @staticmethod
+    async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle admin reply text"""
+        if not await AdminHandlers.check_admin(update):
+            return ConversationHandler.END
+        
+        reply_text = update.message.text
+        ticket_id = context.user_data.get('reply_ticket_id')
+        admin_id = update.effective_user.id
+        
+        if not ticket_id:
+            return ConversationHandler.END
+        
+        # Delete admin's message for privacy
+        try:
+            await update.message.delete()
+        except:
+            pass
+        
+        # Save reply
+        db.reply_to_ticket(ticket_id, reply_text, admin_id)
+        
+        # Get ticket info
+        ticket = db.get_ticket(ticket_id)
+        
+        # Send reply to user
+        try:
+            user_message = f"""
+📬 <b>Reply to your ticket #{ticket_id}</b>
+
+<b>Support Team:</b>
+{escape_html(reply_text)}
+
+This ticket is now closed. Create a new ticket for any other questions.
+
+{config.SUPPORT_MESSAGE}
+"""
+            await context.bot.send_message(
+                chat_id=ticket.user_id,
+                text=user_message,
+                parse_mode='HTML'
+            )
+            
+            # Log action
+            db.log_action(admin_id, 'reply_ticket', {'ticket_id': ticket_id})
+            
+        except Exception as e:
+            logger.error(f"Failed to send reply to user: {e}")
+        
+        # Confirm to admin
+        await context.bot.send_message(
+            chat_id=config.ADMIN_GROUP_ID,
+            text=f"✅ Reply sent for ticket {ticket_id}"
+        )
+        
+        context.user_data.pop('reply_ticket_id', None)
+        return ConversationHandler.END
+    
+    @staticmethod
+    async def update_ticket_message(context: ContextTypes.DEFAULT_TYPE, ticket_id: str):
+        """Update ticket message in admin group"""
+        # This would require storing message IDs - implement if needed
+        pass
+    
+    @staticmethod
+    async def cancel_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Cancel reply"""
+        if not await AdminHandlers.check_admin(update):
+            return ConversationHandler.END
+        
+        await update.message.reply_text("❌ Reply cancelled.")
+        context.user_data.pop('reply_ticket_id', None)
+        return ConversationHandler.END
