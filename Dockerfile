@@ -10,14 +10,14 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
-# Verify aiogram installation
-RUN python -c "import aiogram; print(f'aiogram version: {aiogram.__version__}')"
+# Debug: List installed packages
+RUN pip list
 
 # Copy source code
 COPY src/ ./src/
 
-# Run the bot
-CMD ["python", "src/bot.py"]
+# Run debug first, then bot
+CMD ["sh", "-c", "python src/debug.py && python src/bot.py"]
