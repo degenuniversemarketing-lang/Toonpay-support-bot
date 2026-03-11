@@ -4,8 +4,12 @@ from dotenv import load_dotenv
 from typing import List, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
+import logging
 
+# Load environment variables
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class TicketStatus(Enum):
     OPEN = "open"
@@ -27,13 +31,23 @@ class Config:
     BOT_USERNAME: str = os.getenv("BOT_USERNAME", "")
     
     # Groups
-    ADMIN_GROUP_ID: int = int(os.getenv("ADMIN_GROUP_ID", "0"))
-    BACKUP_GROUP_ID: int = int(os.getenv("BACKUP_GROUP_ID", "0"))
+    try:
+        ADMIN_GROUP_ID: int = int(os.getenv("ADMIN_GROUP_ID", "0"))
+        BACKUP_GROUP_ID: int = int(os.getenv("BACKUP_GROUP_ID", "0"))
+    except ValueError:
+        logger.error("Invalid group ID format in environment variables")
+        ADMIN_GROUP_ID = 0
+        BACKUP_GROUP_ID = 0
     
     # Super Admins
-    SUPER_ADMIN_IDS: List[int] = [
-        int(id.strip()) for id in os.getenv("SUPER_ADMIN_IDS", "").split(",") if id.strip()
-    ]
+    try:
+        SUPER_ADMIN_IDS: List[int] = [
+            int(id.strip()) for id in os.getenv("SUPER_ADMIN_IDS", "").split(",") 
+            if id.strip()
+        ]
+    except ValueError:
+        logger.error("Invalid super admin ID format")
+        SUPER_ADMIN_IDS = []
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///toonpay.db")
@@ -80,10 +94,17 @@ class Config:
         "closed_no_reply": "🔴"
     }
     
-    # Allowed groups (will be loaded from database)
-    @property
-    def ALLOWED_GROUPS(self) -> List[int]:
-        # This will be populated from database
-        return []
+    # Backup settings
+    ENABLE_AUTO_BACKUP: bool = os.getenv("ENABLE_AUTO_BACKUP", "true").lower() == "true"
+    BACKUP_INTERVAL_HOURS: int = int(os.getenv("BACKUP_INTERVAL_HOURS", "24"))
+    
+    def __post_init__(self):
+        """Validate configuration"""
+        if not self.BOT_TOKEN:
+            logger.error("BOT_TOKEN is not set!")
+        if not self.ADMIN_GROUP_ID:
+            logger.warning("ADMIN_GROUP_ID is not set!")
+        if not self.SUPER_ADMIN_IDS:
+            logger.warning("SUPER_ADMIN_IDS is not set!")
 
 config = Config()
