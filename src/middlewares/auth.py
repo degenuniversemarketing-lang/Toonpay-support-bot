@@ -3,7 +3,7 @@ from aiogram.types import Message
 from typing import Callable, Dict, Any, Awaitable
 from sqlalchemy import select
 from database import get_db
-from models import AdminGroup
+from database import AdminGroup
 
 class GroupAuthMiddleware(BaseMiddleware):
     async def __call__(
