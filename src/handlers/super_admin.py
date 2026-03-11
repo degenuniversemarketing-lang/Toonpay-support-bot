@@ -12,7 +12,9 @@ import os
 import io
 import pandas as pd
 import asyncio
+import logging
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 # ==================== SUPER ADMIN PANEL ====================
@@ -65,6 +67,192 @@ async def super_admin_callback(callback: CallbackQuery):
         await callback.message.delete()
         await callback.answer("Panel closed")
 
+async def show_detailed_stats(callback: CallbackQuery):
+    """Show detailed statistics"""
+    async for session in get_db():
+        # Get counts
+        users_count = await session.scalar(select(func.count(User.id)))
+        tickets_count = await session.scalar(select(func.count(Ticket.id)))
+        
+        # Get tickets by status
+        open_tickets = await session.scalar(
+            select(func.count(Ticket.id)).where(Ticket.status == 'open')
+        )
+        progress_tickets = await session.scalar(
+            select(func.count(Ticket.id)).where(Ticket.status == 'in_progress')
+        )
+        replied_closed = await session.scalar(
+            select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.isnot(None)))
+        )
+        closed_no_reply = await session.scalar(
+            select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.is_(None)))
+        )
+        
+        # Get today's tickets
+        today = datetime.utcnow().date()
+        today_tickets = await session.scalar(
+            select(func.count(Ticket.id)).where(
+                func.date(Ticket.created_at) == today
+            )
+        )
+        
+        # Get active groups
+        active_groups = await session.scalar(
+            select(func.count(AdminGroup.id)).where(AdminGroup.is_active == True)
+        )
+        
+        stats_message = f"""
+<b>📊 Detailed Statistics</b>
+
+<b>👥 Users:</b>
+• Total Users: {users_count or 0}
+
+<b>🎫 Tickets Overview:</b>
+• Total Tickets: {tickets_count or 0}
+• 🟢 Open: {open_tickets or 0}
+• 🟡 In Progress: {progress_tickets or 0}
+• ✅ Replied & Closed: {replied_closed or 0}
+• 🔴 Closed No Reply: {closed_no_reply or 0}
+
+<b>📈 Performance:</b>
+• Response Rate: {((replied_closed or 0) / (tickets_count or 1) * 100):.1f}%
+• 📅 Today's Tickets: {today_tickets or 0}
+
+<b>⚙️ Settings:</b>
+• Active Groups: {active_groups or 0}
+• Admin Group: {Config.ADMIN_GROUP_ID}
+"""
+        await callback.message.edit_text(stats_message)
+        await callback.answer()
+
+async def show_all_tickets_filter(callback: CallbackQuery):
+    """Show tickets with filters"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 Open Tickets", callback_data="sa_filter_open")],
+        [InlineKeyboardButton(text="🟡 In Progress", callback_data="sa_filter_progress")],
+        [InlineKeyboardButton(text="✅ Replied & Closed", callback_data="sa_filter_replied")],
+        [InlineKeyboardButton(text="🔴 Closed No Reply", callback_data="sa_filter_closed")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="sa_stats")]
+    ])
+    
+    await callback.message.edit_text(
+        "📋 <b>Select Ticket Filter:</b>",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+async def show_users_management(callback: CallbackQuery):
+    """Show user management options"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 User Statistics", callback_data="sa_user_stats")],
+        [InlineKeyboardButton(text="🔍 Search User", callback_data="sa_user_search")],
+        [InlineKeyboardButton(text="📤 Export Users", callback_data="sa_export_users")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="sa_stats")]
+    ])
+    
+    await callback.message.edit_text(
+        "👥 <b>User Management</b>\n\n"
+        "Select an option:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+async def show_system_settings(callback: CallbackQuery):
+    """Show system settings"""
+    async for session in get_db():
+        groups_count = await session.scalar(
+            select(func.count(AdminGroup.id)).where(AdminGroup.is_active == True)
+        )
+        commands_count = await session.scalar(select(func.count(BotCommand.id)))
+        
+        settings_text = f"""
+<b>🔧 System Settings</b>
+
+<b>Current Configuration:</b>
+• Bot Token: {Config.BOT_TOKEN[:10]}...{Config.BOT_TOKEN[-5:]}
+• Super Admin ID: {Config.SUPER_ADMIN_ID}
+• Admin Group ID: {Config.ADMIN_GROUP_ID}
+
+<b>Database Stats:</b>
+• Active Groups: {groups_count or 0}
+• Custom Commands: {commands_count or 0}
+
+Use these commands to manage settings:
+/addgroup - Add a new group
+/removegroup - Remove a group
+/listgroups - List all groups
+/editcmd - Edit bot commands
+"""
+        await callback.message.edit_text(settings_text)
+        await callback.answer()
+
+async def show_export_options(callback: CallbackQuery):
+    """Show export options"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Complete Export", callback_data="sa_export_all")],
+        [InlineKeyboardButton(text="👥 Users Only", callback_data="sa_export_users")],
+        [InlineKeyboardButton(text="🎫 Tickets Only", callback_data="sa_export_tickets")],
+        [InlineKeyboardButton(text="📅 Last 30 Days", callback_data="sa_export_30d")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="sa_stats")]
+    ])
+    
+    await callback.message.edit_text(
+        "📤 <b>Export Options</b>\n\n"
+        "Select the data you want to export:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+async def show_broadcast_options(callback: CallbackQuery):
+    """Show broadcast options"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Broadcast to All", callback_data="sa_broadcast_all")],
+        [InlineKeyboardButton(text="👥 Broadcast to Users", callback_data="sa_broadcast_users")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="sa_stats")]
+    ])
+    
+    await callback.message.edit_text(
+        "📢 <b>Broadcast Message</b>\n\n"
+        "Select broadcast type:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+async def show_commands_manager(callback: CallbackQuery):
+    """Show commands manager"""
+    async for session in get_db():
+        commands = await session.execute(select(BotCommand))
+        commands = commands.scalars().all()
+        
+        text = "<b>⚙️ Bot Commands</b>\n\n"
+        if commands:
+            for cmd in commands:
+                text += f"• /{cmd.command} - {cmd.response_text[:50]}...\n"
+        else:
+            text += "No custom commands yet.\n"
+        
+        text += "\nUse /editcmd command|response to add/edit commands"
+        
+        await callback.message.edit_text(text)
+        await callback.answer()
+
+async def show_advanced_search(callback: CallbackQuery):
+    """Show advanced search options"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔍 Search by User ID", callback_data="sa_search_id")],
+        [InlineKeyboardButton(text="🔍 Search by Username", callback_data="sa_search_username")],
+        [InlineKeyboardButton(text="🔍 Search by Email", callback_data="sa_search_email")],
+        [InlineKeyboardButton(text="🔍 Search by Phone", callback_data="sa_search_phone")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="sa_stats")]
+    ])
+    
+    await callback.message.edit_text(
+        "🔍 <b>Advanced Search</b>\n\n"
+        "Select search type:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
 # ==================== ENHANCED DATA EXPORT ====================
 
 @router.message(Command("data"))
@@ -87,6 +275,95 @@ async def get_filtered_data(message: Message):
         "Select the type of data you want to export:",
         reply_markup=keyboard
     )
+
+@router.callback_query(F.data.startswith("export_"))
+@admin_group_only()
+async def export_callback(callback: CallbackQuery):
+    """Handle export callbacks"""
+    export_type = callback.data.replace("export_", "")
+    
+    await callback.message.edit_text("📊 Generating export...")
+    
+    async for session in get_db():
+        # Build query based on export type
+        if export_type == "all":
+            tickets_result = await session.execute(select(Ticket))
+        elif export_type == "open":
+            tickets_result = await session.execute(select(Ticket).where(Ticket.status == 'open'))
+        elif export_type == "progress":
+            tickets_result = await session.execute(select(Ticket).where(Ticket.status == 'in_progress'))
+        elif export_type == "replied":
+            tickets_result = await session.execute(
+                select(Ticket).where(and_(Ticket.status == 'closed', Ticket.admin_answer.isnot(None)))
+            )
+        elif export_type == "closed_noreply":
+            tickets_result = await session.execute(
+                select(Ticket).where(and_(Ticket.status == 'closed', Ticket.admin_answer.is_(None)))
+            )
+        elif export_type == "24h":
+            since = datetime.utcnow() - timedelta(hours=24)
+            tickets_result = await session.execute(
+                select(Ticket).where(Ticket.created_at >= since)
+            )
+        elif export_type == "7d":
+            since = datetime.utcnow() - timedelta(days=7)
+            tickets_result = await session.execute(
+                select(Ticket).where(Ticket.created_at >= since)
+            )
+        else:
+            tickets_result = await session.execute(select(Ticket))
+        
+        tickets = tickets_result.scalars().all()
+        
+        # Create export data
+        export_data = []
+        for ticket in tickets:
+            # Get user info
+            user_result = await session.execute(
+                select(User).where(User.telegram_id == ticket.user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            
+            export_data.append({
+                'Ticket ID': ticket.ticket_id,
+                'User ID': ticket.user_id,
+                'Username': user.username if user else 'N/A',
+                'User Name': user.first_name if user else ticket.user_name,
+                'Email': ticket.email,
+                'Phone': ticket.phone,
+                'Category': ticket.category,
+                'Status': ticket.status,
+                'Created': ticket.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'Description': ticket.description,
+                'Admin Answer': ticket.admin_answer or '',
+                'Answered By': ticket.answered_by,
+                'Answered At': ticket.answered_at.strftime('%Y-%m-%d %H:%M:%S') if ticket.answered_at else '',
+                'In Progress By': ticket.in_progress_by
+            })
+        
+        # Create DataFrame
+        df = pd.DataFrame(export_data)
+        
+        # Save to file
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Tickets', index=False)
+        
+        output.seek(0)
+        
+        # Send file
+        filename = f'toonpay_export_{export_type}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        with open(filename, 'wb') as f:
+            f.write(output.getvalue())
+        
+        await callback.message.reply_document(
+            FSInputFile(filename),
+            caption=f"✅ Export completed: {len(export_data)} tickets"
+        )
+        
+        # Clean up
+        os.remove(filename)
+        await callback.message.delete()
 
 @router.message(Command("getdata"))
 @admin_group_only()
@@ -125,8 +402,8 @@ async def enhanced_get_data(message: Message):
                     'Total Tickets': len(tickets),
                     'Open Tickets': sum(1 for t in tickets if t.status == 'open'),
                     'In Progress': sum(1 for t in tickets if t.status == 'in_progress'),
-                    'Replied & Closed': sum(1 for t in tickets if t.status == 'closed' and t.admin_answer),
-                    'Closed No Reply': sum(1 for t in tickets if t.status == 'closed' and not t.admin_answer)
+                    'Replied & Closed': sum(1 for t in tickets if t.status == 'closed' and t.admin_answer is not None),
+                    'Closed No Reply': sum(1 for t in tickets if t.status == 'closed' and t.admin_answer is None)
                 })
                 
                 # Add each ticket as a separate row with user details repeated
@@ -144,17 +421,17 @@ async def enhanced_get_data(message: Message):
                         'User ID': user.telegram_id,
                         'Username': f"@{user.username}" if user.username else 'N/A',
                         'Full Name': f"{user.first_name} {user.last_name or ''}".strip(),
-                        'Email': user.email or 'Not provided',
-                        'Phone': user.phone or 'Not provided',
+                        'Email': ticket.email or user.email or 'Not provided',
+                        'Phone': ticket.phone or user.phone or 'Not provided',
                         'Ticket ID': ticket.ticket_id,
                         'Category': ticket.category,
                         'Status': ticket_status,
                         'Created': ticket.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                         'User Question': ticket.description,
                         'Admin Answer': ticket.admin_answer or 'No reply yet',
-                        'Answered By': f"@{ticket.answered_by}" if ticket.answered_by else 'N/A',
+                        'Answered By': f"Admin {ticket.answered_by}" if ticket.answered_by else 'N/A',
                         'Answered At': ticket.answered_at.strftime('%Y-%m-%d %H:%M:%S') if ticket.answered_at else 'N/A',
-                        'In Progress By': f"@{ticket.in_progress_by}" if ticket.in_progress_by else 'N/A'
+                        'In Progress By': f"Admin {ticket.in_progress_by}" if ticket.in_progress_by else 'N/A'
                     })
             
             # Create DataFrames
@@ -164,6 +441,9 @@ async def enhanced_get_data(message: Message):
             df_detailed.to_excel(writer, sheet_name='Detailed Report', index=False)
             
             # Summary Sheet
+            total_tickets = await session.scalar(select(func.count(Ticket.id)))
+            replied_tickets = await session.scalar(select(func.count(Ticket.id)).where(Ticket.admin_answer.isnot(None)))
+            
             summary_data = {
                 'Metric': [
                     'Total Users',
@@ -176,12 +456,12 @@ async def enhanced_get_data(message: Message):
                 ],
                 'Value': [
                     len(users),
-                    sum(len(u_data) for u_data in [await session.execute(select(Ticket).where(Ticket.user_id == u.telegram_id)) for u in users]),
-                    await session.scalar(select(func.count(Ticket.id)).where(Ticket.status == 'open')),
-                    await session.scalar(select(func.count(Ticket.id)).where(Ticket.status == 'in_progress')),
-                    await session.scalar(select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.isnot(None)))),
-                    await session.scalar(select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.is_(None)))),
-                    f"{(await session.scalar(select(func.count(Ticket.id)).where(Ticket.admin_answer.isnot(None))) / await session.scalar(select(func.count(Ticket.id))) * 100):.1f}%" if await session.scalar(select(func.count(Ticket.id))) > 0 else "0%"
+                    total_tickets or 0,
+                    await session.scalar(select(func.count(Ticket.id)).where(Ticket.status == 'open')) or 0,
+                    await session.scalar(select(func.count(Ticket.id)).where(Ticket.status == 'in_progress')) or 0,
+                    await session.scalar(select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.isnot(None)))) or 0,
+                    await session.scalar(select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.is_(None)))) or 0,
+                    f"{(replied_tickets or 0) / (total_tickets or 1) * 100:.1f}%"
                 ]
             }
             df_summary = pd.DataFrame(summary_data)
@@ -202,243 +482,141 @@ async def enhanced_get_data(message: Message):
         # Clean up
         os.remove(filename)
 
-# ==================== ENHANCED TICKETS COMMAND ====================
+# ==================== GROUP MANAGEMENT ====================
 
-@router.message(Command("tickets"))
-@admin_group_only()
-async def enhanced_tickets_list(message: Message):
-    """Enhanced tickets list with links and detailed status"""
-    async for session in get_db():
-        # Get all tickets
-        result = await session.execute(
-            select(Ticket).order_by(Ticket.created_at.desc())
-        )
-        tickets = result.scalars().all()
-        
-        if not tickets:
-            await message.reply("📭 No tickets found")
-            return
-        
-        # Group tickets by user
-        user_tickets = {}
-        for ticket in tickets:
-            if ticket.user_id not in user_tickets:
-                user_tickets[ticket.user_id] = []
-            user_tickets[ticket.user_id].append(ticket)
-        
-        response = "<b>📋 All Tickets Overview</b>\n\n"
-        
-        for user_id, user_ticket_list in user_tickets.items():
-            # Get user info
-            user_result = await session.execute(
-                select(User).where(User.telegram_id == user_id)
-            )
-            user = user_result.scalar_one_or_none()
-            
-            if user:
-                response += f"<b>👤 User: {user.first_name} (@{user.username if user.username else 'N/A'})</b>\n"
-                
-                for ticket in user_ticket_list[:3]:  # Show last 3 tickets per user
-                    status_emoji = '🟢' if ticket.status == 'open' else '🟡' if ticket.status == 'in_progress' else '🔴'
-                    status_text = 'Open' if ticket.status == 'open' else 'In Progress' if ticket.status == 'in_progress' else 'Closed'
-                    
-                    # Generate message link
-                    if ticket.admin_group_message_id:
-                        message_link = f"https://t.me/c/{str(Config.ADMIN_GROUP_ID).replace('-100', '')}/{ticket.admin_group_message_id}"
-                        ticket_link = f"<a href='{message_link}'>📎 View Ticket</a>"
-                    else:
-                        ticket_link = "No link"
-                    
-                    response += f"\n{status_emoji} <code>{ticket.ticket_id}</code> - {ticket.category}\n"
-                    response += f"   From: {ticket.name}\n"
-                    response += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                    
-                    if ticket.status == 'in_progress' and ticket.in_progress_by:
-                        # Get admin username
-                        response += f"   🟡 In Progress by: <code>Admin {ticket.in_progress_by}</code>\n"
-                        response += f"   {ticket_link} | <b>Question:</b> {ticket.description[:50]}...\n"
-                    
-                    elif ticket.status == 'closed':
-                        if ticket.admin_answer:
-                            response += f"   ✅ Replied by: <code>Admin {ticket.answered_by}</code>\n"
-                            response += f"   <b>Reply:</b> {ticket.admin_answer[:50]}...\n"
-                        else:
-                            response += f"   🔴 Closed by: <code>Admin {ticket.answered_by}</code> (No reply)\n"
-                    
-                    else:  # Open
-                        response += f"   🟢 Waiting for admin\n"
-                        response += f"   <b>Question:</b> {ticket.description[:50]}...\n"
-                    
-                    response += f"   {ticket_link}\n\n"
-                
-                if len(user_ticket_list) > 3:
-                    response += f"   <i>... and {len(user_ticket_list) - 3} more tickets</i>\n\n"
-                
-                response += "─" * 30 + "\n\n"
-        
-        # Split long messages
-        if len(response) > 4000:
-            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for part in parts:
-                await message.reply(part)
-        else:
-            await message.reply(response)
-
-# ==================== ENHANCED SEARCH COMMAND ====================
-
-@router.message(Command("search"))
-@admin_group_only()
-async def enhanced_search_user(message: Message):
-    """Enhanced search with user details and ticket management"""
-    search_term = message.text.replace("/search", "").strip()
-    
-    if not search_term:
-        await message.reply("Usage: /search <username/email/user_id/phone>")
-        return
-    
-    async for session in get_db():
-        # Search users
-        query = select(User).where(
-            or_(
-                User.username.ilike(f"%{search_term}%"),
-                User.email.ilike(f"%{search_term}%"),
-                User.telegram_id == (int(search_term) if search_term.isdigit() else 0),
-                User.phone.ilike(f"%{search_term}%"),
-                User.first_name.ilike(f"%{search_term}%"),
-                User.last_name.ilike(f"%{search_term}%")
-            )
-        )
-        result = await session.execute(query)
-        users = result.scalars().all()
-        
-        if not users:
-            await message.reply("❌ No users found")
-            return
-        
-        for user in users:
-            # Get user's tickets
-            tickets_query = select(Ticket).where(Ticket.user_id == user.telegram_id).order_by(Ticket.created_at.desc())
-            tickets_result = await session.execute(tickets_query)
-            tickets = tickets_result.scalars().all()
-            
-            # Calculate statistics
-            total_tickets = len(tickets)
-            open_tickets = sum(1 for t in tickets if t.status == 'open')
-            in_progress = sum(1 for t in tickets if t.status == 'in_progress')
-            replied_closed = sum(1 for t in tickets if t.status == 'closed' and t.admin_answer)
-            closed_no_reply = sum(1 for t in tickets if t.status == 'closed' and not t.admin_answer)
-            
-            # Format response with user details
-            response = f"""
-<b>👤 User Found:</b>
-• ID: <code>{user.telegram_id}</code>
-• Username: @{user.username if user.username else 'N/A'}
-• Name: {user.first_name} {user.last_name or ''}
-• Email: {user.email or 'Not provided'}
-• Phone: {user.phone or 'Not provided'}
-• Registered: {user.registered_at.strftime('%Y-%m-%d %H:%M')}
-
-<b>📊 Statistics:</b>
-• Total Tickets: {total_tickets}
-• 🟢 Open: {open_tickets}
-• 🟡 In Progress: {in_progress}
-• ✅ Replied & Closed: {replied_closed}
-• 🔴 Closed without reply: {closed_no_reply}
-
-<b>📋 Recent Tickets:</b>
-"""
-            for ticket in tickets[:5]:  # Show last 5 tickets
-                status_emoji = '🟢' if ticket.status == 'open' else '🟡' if ticket.status == 'in_progress' else '🔴'
-                
-                # Generate message link
-                if ticket.admin_group_message_id:
-                    message_link = f"https://t.me/c/{str(Config.ADMIN_GROUP_ID).replace('-100', '')}/{ticket.admin_group_message_id}"
-                    view_link = f"<a href='{message_link}'>📎 View</a>"
-                else:
-                    view_link = "No link"
-                
-                response += f"\n{status_emoji} <code>{ticket.ticket_id}</code> - {ticket.category}\n"
-                response += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                response += f"   <b>Question:</b> {ticket.description[:100]}...\n"
-                
-                if ticket.status == 'in_progress':
-                    response += f"   🟡 In Progress by: Admin {ticket.in_progress_by}\n"
-                    response += f"   {view_link} | <a href='https://t.me/{message.bot.username}?start=reply_{ticket.ticket_id}'>💬 Reply</a>\n"
-                elif ticket.status == 'closed':
-                    if ticket.admin_answer:
-                        response += f"   ✅ <b>Reply:</b> {ticket.admin_answer[:100]}...\n"
-                        response += f"   Replied by: Admin {ticket.answered_by}\n"
-                    else:
-                        response += f"   🔴 Closed without reply by: Admin {ticket.answered_by}\n"
-                else:  # Open
-                    response += f"   🟢 <a href='https://t.me/{message.bot.username}?start=reply_{ticket.ticket_id}'>💬 Click to reply</a>\n"
-            
-            await message.reply(response)
-
-# ==================== REPLY BY COMMAND ====================
-
-@router.message(Command("reply"))
-@admin_group_only()
-async def reply_by_command(message: Message):
-    """Reply to ticket using command: /reply TICKET_ID Your message"""
+@router.message(Command("addgroup"))
+@super_admin_only()
+async def add_group(message: Message):
+    """Add group to activated groups"""
     try:
-        # Parse command: /reply TICKET_ID Your message here
-        text = message.text.replace("/reply", "").strip()
-        parts = text.split(maxsplit=1)
-        
+        parts = message.text.split()
         if len(parts) != 2:
-            await message.reply("❌ Usage: /reply TICKET_ID Your reply message")
+            await message.reply("❌ Invalid format. Use: /addgroup <group_id>")
             return
-        
-        ticket_id, reply_text = parts
+            
+        group_id = int(parts[1])
         
         async for session in get_db():
-            # Find ticket
+            # Check if group exists
             result = await session.execute(
-                select(Ticket).where(Ticket.ticket_id == ticket_id)
+                select(AdminGroup).where(AdminGroup.group_id == group_id)
             )
-            ticket = result.scalar_one_or_none()
+            group = result.scalar_one_or_none()
             
-            if not ticket:
-                await message.reply(f"❌ Ticket {ticket_id} not found")
-                return
-            
-            # Update ticket
-            ticket.admin_answer = reply_text
-            ticket.answered_by = message.from_user.id
-            ticket.answered_at = datetime.utcnow()
-            ticket.status = 'closed'
+            if group:
+                group.is_active = True
+                group.added_by = message.from_user.id
+            else:
+                group = AdminGroup(
+                    group_id=group_id,
+                    group_name=f"Group_{group_id}",
+                    added_by=message.from_user.id,
+                    is_active=True
+                )
+                session.add(group)
             
             await session.commit()
             
-            # Send reply to user
-            await message.bot.send_message(
-                ticket.user_id,
-                f"📬 <b>Reply to your ticket #{ticket_id}</b>\n\n"
-                f"<b>Support Team:</b>\n{reply_text}\n\n"
-                f"<i>This ticket is now closed. ToonPay Support available 24/7.</i>"
-            )
-            
-            # Update admin group message if exists
-            if ticket.admin_group_message_id:
-                try:
-                    await message.bot.edit_message_text(
-                        chat_id=Config.ADMIN_GROUP_ID,
-                        message_id=ticket.admin_group_message_id,
-                        text=f"✅ <b>Ticket {ticket_id} - Closed</b>\n\n"
-                             f"<b>Reply sent by:</b> @{message.from_user.username}\n"
-                             f"<b>Reply:</b> {reply_text}",
-                        reply_markup=None
-                    )
-                except:
-                    pass
-            
-            await message.reply(f"✅ Reply sent for ticket {ticket_id}")
-            
+        await message.reply(f"✅ Group {group_id} has been activated for support commands")
+    except ValueError:
+        await message.reply("❌ Invalid group ID. Must be a number.")
     except Exception as e:
+        logger.error(f"Error adding group: {e}")
         await message.reply(f"❌ Error: {str(e)}")
 
-# ==================== STATISTICS WITH FILTERS ====================
+@router.message(Command("removegroup"))
+@super_admin_only()
+async def remove_group(message: Message):
+    """Remove group from activated groups"""
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            await message.reply("❌ Invalid format. Use: /removegroup <group_id>")
+            return
+            
+        group_id = int(parts[1])
+        
+        async for session in get_db():
+            result = await session.execute(
+                select(AdminGroup).where(AdminGroup.group_id == group_id)
+            )
+            group = result.scalar_one_or_none()
+            
+            if group:
+                group.is_active = False
+                await session.commit()
+                await message.reply(f"✅ Group {group_id} has been deactivated")
+            else:
+                await message.reply("❌ Group not found")
+    except ValueError:
+        await message.reply("❌ Invalid group ID. Must be a number.")
+    except Exception as e:
+        logger.error(f"Error removing group: {e}")
+        await message.reply(f"❌ Error: {str(e)}")
+
+@router.message(Command("listgroups"))
+@super_admin_only()
+async def list_groups(message: Message):
+    """List all activated groups"""
+    async for session in get_db():
+        result = await session.execute(
+            select(AdminGroup).where(AdminGroup.is_active == True)
+        )
+        groups = result.scalars().all()
+        
+        if not groups:
+            await message.reply("📭 No active groups")
+            return
+        
+        response = "<b>📋 Active Groups:</b>\n\n"
+        for group in groups:
+            response += f"• <code>{group.group_id}</code> - {group.group_name}\n"
+            response += f"  Added: {group.added_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+        
+        await message.reply(response)
+
+# ==================== COMMAND MANAGEMENT ====================
+
+@router.message(Command("editcmd"))
+@super_admin_only()
+async def edit_command(message: Message):
+    """Edit bot command responses"""
+    # Format: /editcmd command|new response
+    try:
+        text = message.text.replace("/editcmd", "").strip()
+        parts = text.split("|")
+        if len(parts) != 2:
+            await message.reply("❌ Invalid format. Use: /editcmd command|new response")
+            return
+        
+        command, response = parts[0].strip(), parts[1].strip()
+        
+        async for session in get_db():
+            result = await session.execute(
+                select(BotCommand).where(BotCommand.command == command)
+            )
+            cmd = result.scalar_one_or_none()
+            
+            if cmd:
+                cmd.response_text = response
+                cmd.updated_by = message.from_user.id
+                cmd.updated_at = datetime.utcnow()
+            else:
+                cmd = BotCommand(
+                    command=command,
+                    response_text=response,
+                    updated_by=message.from_user.id
+                )
+                session.add(cmd)
+            
+            await session.commit()
+            
+        await message.reply(f"✅ Command '{command}' updated successfully")
+    except Exception as e:
+        logger.error(f"Error editing command: {e}")
+        await message.reply(f"❌ Error: {str(e)}")
+
+# ==================== STATISTICS ====================
 
 @router.message(Command("stats"))
 @admin_group_only()
@@ -468,8 +646,6 @@ async def stats_callback(callback: CallbackQuery):
     filter_type = callback.data.replace("stats_", "")
     
     async for session in get_db():
-        base_query = select(func.count(Ticket.id))
-        
         if filter_type == "general":
             # General stats
             total = await session.scalar(select(func.count(Ticket.id)))
@@ -477,9 +653,13 @@ async def stats_callback(callback: CallbackQuery):
             progress = await session.scalar(select(func.count(Ticket.id)).where(Ticket.status == 'in_progress'))
             replied = await session.scalar(select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.isnot(None))))
             closed_no = await session.scalar(select(func.count(Ticket.id)).where(and_(Ticket.status == 'closed', Ticket.admin_answer.is_(None))))
+            users_count = await session.scalar(select(func.count(User.id)))
             
             stats_text = f"""
 <b>📊 General Statistics</b>
+
+<b>👥 Users:</b>
+• Total Users: {users_count or 0}
 
 <b>🎫 Tickets Overview:</b>
 • Total Tickets: {total or 0}
@@ -490,7 +670,6 @@ async def stats_callback(callback: CallbackQuery):
 
 <b>📈 Performance:</b>
 • Response Rate: {((replied or 0) / (total or 1) * 100):.1f}%
-• Total Users: {await session.scalar(select(func.count(User.id))) or 0}
             """
             
         elif filter_type == "open":
@@ -562,5 +741,43 @@ async def stats_callback(callback: CallbackQuery):
                 status = '🟢' if t.status == 'open' else '🟡' if t.status == 'in_progress' else '🔴'
                 stats_text += f"{status} <code>{t.ticket_id}</code> - {t.category}\n  From: {t.name}\n  Created: {t.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
         
+        else:
+            stats_text = "Invalid filter"
+        
         await callback.message.edit_text(stats_text)
         await callback.answer()
+
+# ==================== BROADCAST ====================
+
+@router.message(Command("broadcast"))
+@super_admin_only()
+async def broadcast_message(message: Message):
+    """Broadcast message to all users"""
+    text = message.text.replace("/broadcast", "").strip()
+    
+    if not text:
+        await message.reply("❌ Usage: /broadcast <message>")
+        return
+    
+    await message.reply("📨 Broadcasting message to all users...")
+    
+    async for session in get_db():
+        result = await session.execute(select(User))
+        users = result.scalars().all()
+        
+        success = 0
+        failed = 0
+        
+        for user in users:
+            try:
+                await message.bot.send_message(
+                    user.telegram_id,
+                    f"📢 <b>Announcement:</b>\n\n{text}\n\n⏱️ ToonPay Support Available 24/7"
+                )
+                success += 1
+                await asyncio.sleep(0.05)  # Small delay to avoid flooding
+            except Exception as e:
+                logger.error(f"Failed to send to {user.telegram_id}: {e}")
+                failed += 1
+        
+        await message.reply(f"✅ Broadcast completed!\n✓ Sent: {success}\n✗ Failed: {failed}")
