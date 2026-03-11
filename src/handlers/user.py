@@ -142,8 +142,7 @@ async def description_entered(message: Message, state: FSMContext):
         await session.commit()
         await session.refresh(ticket)
         
-        # Send to admin group
-        from bot_compat import bot
+        # Send to admin group - USE MESSAGE.BOT INSTEAD OF IMPORTING BOT
         admin_message = format_ticket_for_admin({
             'ticket_id': ticket_id,
             'user_id': message.from_user.id,
@@ -158,7 +157,7 @@ async def description_entered(message: Message, state: FSMContext):
         
         from keyboards.admin_keyboards import get_ticket_action_keyboard
         
-        sent_message = await bot.send_message(
+        sent_message = await message.bot.send_message(
             Config.ADMIN_GROUP_ID,
             admin_message,
             reply_markup=get_ticket_action_keyboard(ticket_id)
