@@ -442,3 +442,8 @@ async def update_phone_process(message: Message, state: FSMContext):
             await message.answer("User not found. Please use /start first.")
     
     await state.clear()
+    # Ignore any commands in groups (they should be handled by group handler)
+@router.message(F.chat.type.in_({'group', 'supergroup'}))
+async def ignore_group_commands(message: Message):
+    """Ignore any commands in groups - let group handler handle them"""
+    pass
