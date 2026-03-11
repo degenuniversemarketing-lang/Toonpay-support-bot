@@ -1,2 +1,12 @@
-# This file makes handlers a package
-# Don't import anything here to avoid circular imports
+# src/handlers/__init__.py
+from .user import UserHandlers
+from .admin import AdminHandlers
+from .super_admin import SuperAdminHandlers
+from .group import GroupHandlers
+
+__all__ = [
+    'UserHandlers',
+    'AdminHandlers', 
+    'SuperAdminHandlers',
+    'GroupHandlers'
+]
