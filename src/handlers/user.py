@@ -1,314 +1,113 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
-from database import get_db
-from database import User, Ticket
-from keyboards.user_keyboards import *
-from utils.helpers import generate_ticket_id, format_ticket_for_admin
-from config import Config
+# src/handlers/user.py
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler
 import logging
+from datetime import datetime
 
-router = Router()
+from src.database import db
+from src.config import config
+from src.keyboards import (
+    get_main_keyboard, get_categories_keyboard,
+    get_confirmation_keyboard, get_user_tickets_keyboard
+)
+from src.utils import (
+    validate_email, validate_phone, format_ticket_info,
+    format_ticket_list, escape_html
+)
 
-class TicketForm(StatesGroup):
-    choosing_category = State()
-    entering_name = State()
-    entering_email = State()
-    entering_phone = State()
-    entering_description = State()
+logger = logging.getLogger(__name__)
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    """Handle /start command - Save user and show welcome message"""
-    await state.clear()
-    
-    # Save or update user in database
-    async for session in get_db():
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-        
-        if not user:
-            # New user - save basic info
-            user = User(
-                telegram_id=message.from_user.id,
-                username=message.from_user.username,
-                first_name=message.from_user.first_name,
-                last_name=message.from_user.last_name,
-                phone=None,  # Will be filled during ticket creation
-                email=None   # Will be filled during ticket creation
-            )
-            session.add(user)
-            await session.commit()
-            logging.info(f"New user saved: {message.from_user.id}")
-        else:
-            # Update existing user's info if changed
-            user.username = message.from_user.username
-            user.first_name = message.from_user.first_name
-            user.last_name = message.from_user.last_name
-            await session.commit()
-            logging.info(f"User updated: {message.from_user.id}")
-    
-    welcome_text = """
-🎫 <b>Welcome to ToonPay Support Bot!</b>
+# Conversation states
+NAME, EMAIL, PHONE, QUESTION, CONFIRM = range(5)
 
-I'm here to help you with any issues you might have.
-
-<b>How to create a ticket:</b>
-1️⃣ Click 'New Ticket'
-2️⃣ Select your issue category
-3️⃣ Provide your details
-4️⃣ Describe your issue
-5️⃣ Submit
-
-⏱️ <b>ToonPay Support Available 24/7</b>
-
-Click the button below to start!
-"""
-    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
-
-@router.callback_query(F.data == "new_ticket")
-async def new_ticket(callback: CallbackQuery, state: FSMContext):
-    """Start new ticket creation"""
-    await callback.message.edit_text(
-        "📋 <b>Select your issue category:</b>",
-        reply_markup=get_categories_keyboard()
-    )
-    await state.set_state(TicketForm.choosing_category)
-    await callback.answer()
-
-@router.callback_query(TicketForm.choosing_category, F.data.startswith("cat_"))
-async def category_chosen(callback: CallbackQuery, state: FSMContext):
-    """Handle category selection"""
-    category = callback.data.replace("cat_", "")
-    await state.update_data(category=category)
+class UserHandlers:
     
-    await callback.message.edit_text(
-        "👤 <b>Please enter your full name:</b>\n\n"
-        "Example: John Doe",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(TicketForm.entering_name)
-    await callback.answer()
-
-@router.message(TicketForm.entering_name)
-async def name_entered(message: Message, state: FSMContext):
-    """Handle name input"""
-    await state.update_data(name=message.text)
-    
-    await message.answer(
-        "📧 <b>Please enter your email address:</b>\n\n"
-        "Example: user@example.com",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(TicketForm.entering_email)
-
-@router.message(TicketForm.entering_email)
-async def email_entered(message: Message, state: FSMContext):
-    """Handle email input and save to user profile"""
-    email = message.text.strip()
-    
-    # Basic email validation
-    if '@' not in email or '.' not in email:
-        await message.answer(
-            "❌ <b>Invalid email format.</b>\n\n"
-            "Please enter a valid email address:\n"
-            "Example: user@example.com",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-    
-    await state.update_data(email=email)
-    
-    # Save email to user profile immediately
-    async for session in get_db():
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-        if user:
-            user.email = email
-            await session.commit()
-            logging.info(f"Email saved for user {message.from_user.id}: {email}")
-    
-    await message.answer(
-        "📱 <b>Please enter your phone number:</b>\n\n"
-        "Example: +1234567890",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(TicketForm.entering_phone)
-
-@router.message(TicketForm.entering_phone)
-async def phone_entered(message: Message, state: FSMContext):
-    """Handle phone input and save to user profile"""
-    phone = message.text.strip()
-    
-    # Basic phone validation (allows +, numbers, spaces, dashes)
-    import re
-    if not re.match(r'^[\+\d\s\-\(\)]{8,20}$', phone):
-        await message.answer(
-            "❌ <b>Invalid phone number format.</b>\n\n"
-            "Please enter a valid phone number:\n"
-            "Example: +1234567890",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-    
-    await state.update_data(phone=phone)
-    
-    # Save phone to user profile immediately
-    async for session in get_db():
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-        if user:
-            user.phone = phone
-            await session.commit()
-            logging.info(f"Phone saved for user {message.from_user.id}: {phone}")
-    
-    await message.answer(
-        "📝 <b>Please describe your issue in detail:</b>\n\n"
-        "Include all relevant information to help us assist you better.",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(TicketForm.entering_description)
-
-@router.message(TicketForm.entering_description)
-async def description_entered(message: Message, state: FSMContext):
-    """Handle description and create ticket"""
-    data = await state.get_data()
-    
-    # Generate ticket ID
-    ticket_id = generate_ticket_id()
-    
-    # Save ticket to database
-    async for session in get_db():
-        ticket = Ticket(
-            ticket_id=ticket_id,
-            user_id=message.from_user.id,
-            user_name=message.from_user.full_name,
-            category=data['category'],
-            name=data['name'],
-            email=data['email'],
-            phone=data['phone'],
-            description=message.text
-        )
-        session.add(ticket)
-        await session.commit()
-        await session.refresh(ticket)
-        
-        # Also update user profile with latest info if not already saved
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-        if user:
-            if not user.email:
-                user.email = data['email']
-            if not user.phone:
-                user.phone = data['phone']
-            await session.commit()
-        
-        # Send to admin group
-        admin_message = format_ticket_for_admin({
-            'ticket_id': ticket_id,
-            'user_id': message.from_user.id,
-            'name': data['name'],
-            'email': data['email'],
-            'phone': data['phone'],
-            'category': data['category'],
-            'description': message.text,
-            'status': 'open',
-            'created_at': ticket.created_at
-        })
-        
-        from keyboards.admin_keyboards import get_ticket_action_keyboard
-        
-        sent_message = await message.bot.send_message(
-            Config.ADMIN_GROUP_ID,
-            admin_message,
-            reply_markup=get_ticket_action_keyboard(ticket_id)
-        )
-        
-        # Save admin group message ID
-        ticket.admin_group_message_id = sent_message.message_id
-        await session.commit()
-        
-        logging.info(f"Ticket created: {ticket_id} for user {message.from_user.id}")
-    
-    await message.answer(
-        f"✅ <b>Ticket Created Successfully!</b>\n\n"
-        f"Your ticket ID: <code>{ticket_id}</code>\n\n"
-        f"We'll get back to you soon.\n"
-        f"You can check your ticket status anytime.\n\n"
-        f"⏱️ <b>ToonPay Support Available 24/7</b>",
-        reply_markup=get_main_menu_keyboard()
-    )
-    
-    await state.clear()
-
-@router.callback_query(F.data == "cancel")
-async def cancel_action(callback: CallbackQuery, state: FSMContext):
-    """Cancel current action"""
-    await state.clear()
-    await callback.message.edit_text(
-        "❌ Action cancelled. What would you like to do?",
-        reply_markup=get_main_menu_keyboard()
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "my_tickets")
-async def my_tickets(callback: CallbackQuery):
-    """Show user's tickets"""
-    async for session in get_db():
-        result = await session.execute(
-            select(Ticket).where(Ticket.user_id == callback.from_user.id).order_by(Ticket.created_at.desc())
-        )
-        tickets = result.scalars().all()
-        
-        if not tickets:
-            await callback.message.edit_text(
-                "📭 You haven't created any tickets yet.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            await callback.answer()
+    @staticmethod
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command - only works in private"""
+        # Check if in private chat
+        if update.effective_chat.type != 'private':
+            # Delete message in groups
+            try:
+                await update.message.delete()
+            except:
+                pass
             return
         
-        response = "📋 <b>Your Tickets:</b>\n\n"
-        for ticket in tickets[:5]:  # Show last 5 tickets
-            status_emoji = '🟢' if ticket.status == 'open' else '🟡' if ticket.status == 'in_progress' else '🔴'
-            status_text = 'Open' if ticket.status == 'open' else 'In Progress' if ticket.status == 'in_progress' else 'Closed'
-            
-            response += f"{status_emoji} <code>{ticket.ticket_id}</code> - {ticket.category}\n"
-            response += f"   Status: {status_text}\n"
-            response += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-            
-            if ticket.admin_answer:
-                response += f"   ✓ Reply: {ticket.admin_answer[:100]}...\n"
-            response += "\n"
+        user = update.effective_user
         
-        response += "\n⏱️ <b>ToonPay Support Available 24/7</b>"
-        
-        await callback.message.edit_text(
-            response,
-            reply_markup=get_main_menu_keyboard()
-        )
-    await callback.answer()
+        # Check if started from group
+        if context.args and context.args[0] == 'group':
+            welcome_text = f"""
+👋 Welcome to {config.COMPANY_NAME} Support!
 
-@router.callback_query(F.data == "help")
-async def help_command(callback: CallbackQuery):
-    """Show help message"""
-    help_text = """
+You've been redirected from a group. Please create a ticket below and our support team will assist you.
+
+{config.SUPPORT_MESSAGE}
+"""
+        else:
+            welcome_text = f"""
+👋 Welcome to {config.COMPANY_NAME} Support!
+
+I'm here to help you with any issues you're experiencing.
+
+{config.SUPPORT_MESSAGE}
+
+Choose an option below to get started:
+"""
+        
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=get_main_keyboard()
+        )
+    
+    @staticmethod
+    async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle callback queries"""
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        
+        if data == 'new_ticket':
+            # Start new ticket creation
+            context.user_data.clear()
+            await query.edit_message_text(
+                "📝 <b>Please enter your full name:</b>\n\n"
+                "Example: John Doe",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancel", callback_data='cancel')
+                ]])
+            )
+            return NAME
+        
+        elif data == 'my_tickets':
+            # Show user's tickets
+            user_id = update.effective_user.id
+            tickets = db.get_user_tickets(user_id, limit=10)
+            
+            if tickets:
+                text = format_ticket_list(tickets, "📋 Your Tickets")
+                await query.edit_message_text(
+                    text,
+                    reply_markup=get_user_tickets_keyboard(tickets),
+                    parse_mode='HTML'
+                )
+            else:
+                await query.edit_message_text(
+                    "📭 You haven't created any tickets yet.\n\n"
+                    "Click 'New Ticket' to create your first ticket.",
+                    reply_markup=get_main_keyboard()
+                )
+        
+        elif data == 'help':
+            help_text = f"""
 ℹ️ <b>Help & Support</b>
 
 <b>How to create a ticket:</b>
-1. Click "New Ticket"
-2. Select category
+1. Click 'New Ticket'
+2. Select issue category
 3. Provide your details
 4. Describe your issue
 5. Submit
@@ -317,133 +116,281 @@ async def help_command(callback: CallbackQuery):
 • Each ticket is for one issue only
 • Tickets close after admin reply
 • Create new ticket for new questions
-• Your email and phone are saved for faster support
+• Response Time: Within 24 hours
 
-<b>⏱️ ToonPay Support Available 24/7</b>
-
-Need immediate assistance? Contact @ToonPaySupport
+{config.SUPPORT_MESSAGE}
 """
-    await callback.message.edit_text(
-        help_text,
-        reply_markup=get_main_menu_keyboard()
-    )
-    await callback.answer()
-
-@router.message(Command("profile"))
-async def show_profile(message: Message):
-    """Show user profile with saved email and phone"""
-    async for session in get_db():
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
+            await query.edit_message_text(
+                help_text,
+                parse_mode='HTML',
+                reply_markup=get_main_keyboard()
+            )
+        
+        elif data == 'main_menu':
+            await query.edit_message_text(
+                f"👋 Welcome back!\n\n{config.SUPPORT_MESSAGE}",
+                reply_markup=get_main_keyboard()
+            )
+        
+        elif data == 'cancel':
+            context.user_data.clear()
+            await query.edit_message_text(
+                "❌ Operation cancelled.",
+                reply_markup=get_main_keyboard()
+            )
+            return ConversationHandler.END
+        
+        elif data.startswith('cat_'):
+            # Category selected
+            category = data.replace('cat_', '')
+            context.user_data['category'] = category
+            
+            category_info = config.CATEGORIES.get(category, {'name': category})
+            
+            await query.edit_message_text(
+                f"📝 <b>Describe your issue</b>\n\n"
+                f"Category: {category_info['name']}\n\n"
+                f"Please provide details about your issue:",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancel", callback_data='cancel')
+                ]])
+            )
+            return QUESTION
+        
+        elif data.startswith('view_ticket_'):
+            # View specific ticket
+            ticket_id = data.replace('view_ticket_', '')
+            ticket = db.get_ticket(ticket_id)
+            
+            if ticket:
+                text = format_ticket_info(ticket, include_admin=True)
+                keyboard = [[
+                    InlineKeyboardButton("🔙 Back to Tickets", callback_data='my_tickets')
+                ]]
+                await query.edit_message_text(
+                    text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+    
+    @staticmethod
+    async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get user's full name"""
+        # Delete user's message for privacy
+        try:
+            await update.message.delete()
+        except:
+            pass
+        
+        name = update.message.text.strip()
+        
+        if len(name) < 2:
+            await update.message.reply_text(
+                "❌ Please enter a valid name (minimum 2 characters):"
+            )
+            return NAME
+        
+        context.user_data['full_name'] = name
+        
+        await update.message.reply_text(
+            "📧 <b>Please enter your email address:</b>\n\n"
+            "Example: user@example.com",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data='cancel')
+            ]])
         )
-        user = result.scalar_one_or_none()
+        return EMAIL
+    
+    @staticmethod
+    async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get user's email"""
+        try:
+            await update.message.delete()
+        except:
+            pass
         
-        if not user:
-            await message.answer("Please use /start first to create your profile.")
-            return
+        email = update.message.text.strip()
         
-        # Get user's ticket count
-        tickets_count = await session.scalar(
-            select(func.count(Ticket.id)).where(Ticket.user_id == message.from_user.id)
+        if not validate_email(email):
+            await update.message.reply_text(
+                "❌ Invalid email format. Please enter a valid email:"
+            )
+            return EMAIL
+        
+        context.user_data['email'] = email
+        
+        await update.message.reply_text(
+            "📱 <b>Please enter your phone number:</b>\n\n"
+            "Example: +1234567890",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data='cancel')
+            ]])
         )
+        return PHONE
+    
+    @staticmethod
+    async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get user's phone number"""
+        try:
+            await update.message.delete()
+        except:
+            pass
         
-        profile_text = f"""
-<b>👤 Your Profile</b>
+        phone = update.message.text.strip()
+        
+        if not validate_phone(phone):
+            await update.message.reply_text(
+                "❌ Invalid phone format. Please enter a valid phone number:"
+            )
+            return PHONE
+        
+        context.user_data['phone'] = phone
+        
+        # Show categories
+        await update.message.reply_text(
+            "📋 <b>Select Issue Category:</b>",
+            parse_mode='HTML',
+            reply_markup=get_categories_keyboard()
+        )
+        return ConversationHandler.END
+    
+    @staticmethod
+    async def get_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get user's question and confirm"""
+        try:
+            await update.message.delete()
+        except:
+            pass
+        
+        question = update.message.text.strip()
+        
+        if len(question) < 10:
+            await update.message.reply_text(
+                "❌ Please provide more details (minimum 10 characters):"
+            )
+            return QUESTION
+        
+        context.user_data['question'] = question
+        
+        # Show confirmation
+        category = context.user_data.get('category', 'other')
+        category_info = config.CATEGORIES.get(category, {'name': category})
+        
+        confirm_text = f"""
+✅ <b>Please confirm your ticket details:</b>
 
-• User ID: <code>{user.telegram_id}</code>
+<b>Name:</b> {escape_html(context.user_data['full_name'])}
+<b>Email:</b> {escape_html(context.user_data['email'])}
+<b>Phone:</b> {escape_html(context.user_data['phone'])}
+<b>Category:</b> {category_info['name']}
+
+<b>Question:</b>
+{escape_html(question)}
+
+Is everything correct?
+"""
+        
+        await update.message.reply_text(
+            confirm_text,
+            parse_mode='HTML',
+            reply_markup=get_confirmation_keyboard()
+        )
+        return CONFIRM
+    
+    @staticmethod
+    async def confirm_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Confirm and create ticket"""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == 'confirm_yes':
+            # Create ticket
+            user = update.effective_user
+            user_id = user.id
+            username = user.username or "NoUsername"
+            
+            # Save user to database
+            db.get_or_create_user(
+                user_id=user_id,
+                username=username,
+                full_name=context.user_data['full_name'],
+                email=context.user_data['email'],
+                phone=context.user_data['phone']
+            )
+            
+            # Create ticket
+            ticket = db.create_ticket(
+                user_id=user_id,
+                category=context.user_data['category'],
+                question=context.user_data['question']
+            )
+            
+            # Send confirmation to user
+            await query.edit_message_text(
+                f"✅ <b>Ticket Created Successfully!</b>\n\n"
+                f"Your ticket ID: <code>{ticket.ticket_id}</code>\n\n"
+                f"We'll get back to you soon.\n\n"
+                f"{config.SUPPORT_MESSAGE}",
+                parse_mode='HTML',
+                reply_markup=get_main_keyboard()
+            )
+            
+            # Notify admin group
+            await UserHandlers.notify_admin_group(context, ticket, user)
+            
+            # Clear user data
+            context.user_data.clear()
+            
+        else:
+            await query.edit_message_text(
+                "❌ Ticket creation cancelled.",
+                reply_markup=get_main_keyboard()
+            )
+            context.user_data.clear()
+        
+        return ConversationHandler.END
+    
+    @staticmethod
+    async def notify_admin_group(context: ContextTypes.DEFAULT_TYPE, ticket, user):
+        """Notify admin group about new ticket"""
+        try:
+            from src.keyboards import get_ticket_action_keyboard
+            
+            user_info = db.get_user(user.id)
+            category_info = config.CATEGORIES.get(ticket.category, {'name': ticket.category, 'emoji': '📌'})
+            
+            admin_text = f"""
+🎫 <b>NEW TICKET</b>
+
+<b>Ticket ID:</b> <code>{ticket.ticket_id}</code>
+<b>Status:</b> 🟢 Open
+
+👤 <b>User Details:</b>
+• ID: <code>{user.id}</code>
 • Username: @{user.username if user.username else 'N/A'}
-• Name: {user.first_name} {user.last_name or ''}
-• Email: {user.email or 'Not provided'}
-• Phone: {user.phone or 'Not provided'}
-• Registered: {user.registered_at.strftime('%Y-%m-%d %H:%M')}
-• Total Tickets: {tickets_count or 0}
+• Name: {escape_html(user_info.full_name)}
+• Email: {escape_html(user_info.email)}
+• Phone: {escape_html(user_info.phone)}
 
-<b>⏱️ ToonPay Support Available 24/7</b>
+📋 <b>Ticket Details:</b>
+• Category: {category_info['emoji']} {category_info['name']}
+• Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+
+📝 <b>Issue Description:</b>
+{escape_html(ticket.question)}
+
+<b>Response Time:</b> Within 24 hours
 """
-        await message.answer(profile_text, reply_markup=get_main_menu_keyboard())
-
-@router.message(Command("update_email"))
-async def update_email_start(message: Message, state: FSMContext):
-    """Start email update process"""
-    await message.answer(
-        "📧 <b>Update Email</b>\n\n"
-        "Please enter your new email address:",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state("updating_email")
-
-@router.message(F.state == "updating_email")
-async def update_email_process(message: Message, state: FSMContext):
-    """Process email update"""
-    email = message.text.strip()
-    
-    if '@' not in email or '.' not in email:
-        await message.answer(
-            "❌ Invalid email format. Please try again:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-    
-    async for session in get_db():
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-        
-        if user:
-            user.email = email
-            await session.commit()
-            await message.answer(
-                f"✅ Email updated successfully to: {email}",
-                reply_markup=get_main_menu_keyboard()
+            
+            await context.bot.send_message(
+                chat_id=config.ADMIN_GROUP_ID,
+                text=admin_text,
+                reply_markup=get_ticket_action_keyboard(ticket.ticket_id, ticket.status),
+                parse_mode='HTML'
             )
-        else:
-            await message.answer("User not found. Please use /start first.")
-    
-    await state.clear()
-
-@router.message(Command("update_phone"))
-async def update_phone_start(message: Message, state: FSMContext):
-    """Start phone update process"""
-    await message.answer(
-        "📱 <b>Update Phone Number</b>\n\n"
-        "Please enter your new phone number:",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state("updating_phone")
-
-@router.message(F.state == "updating_phone")
-async def update_phone_process(message: Message, state: FSMContext):
-    """Process phone update"""
-    phone = message.text.strip()
-    
-    import re
-    if not re.match(r'^[\+\d\s\-\(\)]{8,20}$', phone):
-        await message.answer(
-            "❌ Invalid phone format. Please try again:",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-    
-    async for session in get_db():
-        result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-        
-        if user:
-            user.phone = phone
-            await session.commit()
-            await message.answer(
-                f"✅ Phone number updated successfully to: {phone}",
-                reply_markup=get_main_menu_keyboard()
-            )
-        else:
-            await message.answer("User not found. Please use /start first.")
-    
-    await state.clear()
-    # Ignore any commands in groups (they should be handled by group handler)
-@router.message(F.chat.type.in_({'group', 'supergroup'}))
-async def ignore_group_commands(message: Message):
-    """Ignore any commands in groups - let group handler handle them"""
-    pass
+            
+        except Exception as e:
+            logger.error(f"Failed to notify admin group: {e}")
