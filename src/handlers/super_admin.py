@@ -3,7 +3,7 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import Command
 from sqlalchemy import select, func
 from database import get_db
-from models import AdminGroup, BotCommand, User, Ticket
+from database import AdminGroup, BotCommand, User, Ticket
 from utils.decorators import super_admin_only
 from utils.helpers import format_user_data_for_export
 from config import Config
@@ -81,6 +81,27 @@ async def remove_group(message: Message):
     except Exception as e:
         await message.reply(f"❌ Error: {str(e)}")
 
+@router.message(Command("listgroups"))
+@super_admin_only()
+async def list_groups(message: Message):
+    """List all activated groups"""
+    async for session in get_db():
+        result = await session.execute(
+            select(AdminGroup).where(AdminGroup.is_active == True)
+        )
+        groups = result.scalars().all()
+        
+        if not groups:
+            await message.reply("📭 No active groups")
+            return
+        
+        response = "<b>📋 Active Groups:</b>\n\n"
+        for group in groups:
+            response += f"• <code>{group.group_id}</code> - {group.group_name}\n"
+            response += f"  Added: {group.added_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+        
+        await message.reply(response)
+
 @router.message(Command("getdata"))
 @super_admin_only()
 async def get_all_data(message: Message):
@@ -106,7 +127,7 @@ async def get_all_data(message: Message):
                 'Last Name': user.last_name,
                 'Email': user.email,
                 'Phone': user.phone,
-                'Registered At': user.registered_at,
+                'Registered At': user.registered_at.strftime('%Y-%m-%d %H:%M:%S'),
                 'Is Blocked': user.is_blocked
             })
         
@@ -122,10 +143,10 @@ async def get_all_data(message: Message):
                 'Phone': ticket.phone,
                 'Description': ticket.description,
                 'Status': ticket.status,
-                'Created At': ticket.created_at,
+                'Created At': ticket.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                 'Admin Answer': ticket.admin_answer,
                 'Answered By': ticket.answered_by,
-                'Answered At': ticket.answered_at,
+                'Answered At': ticket.answered_at.strftime('%Y-%m-%d %H:%M:%S') if ticket.answered_at else None,
                 'In Progress By': ticket.in_progress_by
             })
         
@@ -174,10 +195,22 @@ async def show_statistics(message: Message):
             )
         )
         
+        # Get this week's tickets
+        week_ago = datetime.utcnow() - timedelta(days=7)
+        week_tickets = await session.scalar(
+            select(func.count(Ticket.id)).where(Ticket.created_at >= week_ago)
+        )
+        
         # Get active groups
         active_groups = await session.scalar(
             select(func.count(AdminGroup.id)).where(AdminGroup.is_active == True)
         )
+        
+        # Get response rate
+        answered_tickets = await session.scalar(
+            select(func.count(Ticket.id)).where(Ticket.admin_answer.isnot(None))
+        )
+        response_rate = (answered_tickets / tickets_count * 100) if tickets_count else 0
         
         stats_message = f"""
 <b>📊 Bot Statistics</b>
@@ -191,6 +224,11 @@ async def show_statistics(message: Message):
 • 🟡 In Progress: {progress_tickets or 0}
 • 🔴 Closed: {closed_tickets or 0}
 • 📅 Today: {today_tickets or 0}
+• 📆 This Week: {week_tickets or 0}
+
+<b>📈 Performance:</b>
+• Response Rate: {response_rate:.1f}%
+• Answered: {answered_tickets or 0}
 
 <b>⚙️ Settings:</b>
 • Active Groups: {active_groups or 0}
@@ -236,23 +274,36 @@ async def edit_command(message: Message):
     except Exception as e:
         await message.reply(f"❌ Error: {str(e)}")
 
-@router.message(Command("listgroups"))
+@router.message(Command("broadcast"))
 @super_admin_only()
-async def list_groups(message: Message):
-    """List all activated groups"""
+async def broadcast_message(message: Message):
+    """Broadcast message to all users"""
+    text = message.text.replace("/broadcast", "").strip()
+    
+    if not text:
+        await message.reply("❌ Usage: /broadcast <message>")
+        return
+    
+    await message.reply("📨 Broadcasting message to all users...")
+    
     async for session in get_db():
-        result = await session.execute(
-            select(AdminGroup).where(AdminGroup.is_active == True)
-        )
-        groups = result.scalars().all()
+        result = await session.execute(select(User))
+        users = result.scalars().all()
         
-        if not groups:
-            await message.reply("📭 No active groups")
-            return
+        success = 0
+        failed = 0
         
-        response = "<b>📋 Active Groups:</b>\n\n"
-        for group in groups:
-            response += f"• <code>{group.group_id}</code> - {group.group_name}\n"
-            response += f"  Added: {group.added_at.strftime('%Y-%m-%d')}\n\n"
+        for user in users:
+            try:
+                await message.bot.send_message(
+                    user.telegram_id,
+                    f"📢 <b>Announcement:</b>\n\n{text}"
+                )
+                success += 1
+            except Exception:
+                failed += 1
+            
+            # Small delay to avoid flooding
+            await asyncio.sleep(0.05)
         
-        await message.reply(response)
+        await message.reply(f"✅ Broadcast completed!\n✓ Sent: {success}\n✗ Failed: {failed}")
