@@ -1,5 +1,7 @@
-# This file makes src a Python package
-import logging
-
-# Configure package-level logger
-logging.getLogger(__name__).addHandler(logging.NullHandler())
+# src/__init__.py
+"""
+ToonPay Advanced Support Bot
+Enterprise-level Telegram support bot with complete ticket management
+"""
+__version__ = "1.0.0"
+__author__ = "ToonPay"
