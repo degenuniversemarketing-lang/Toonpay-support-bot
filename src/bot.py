@@ -3,7 +3,6 @@ import logging
 import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config import Config
 from database import init_db
@@ -22,11 +21,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize bot and dispatcher
-bot = Bot(
-    token=Config.BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+# Try to import with different aiogram versions
+try:
+    # For aiogram 3.x
+    from aiogram.client.default import DefaultBotProperties
+    bot = Bot(
+        token=Config.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
+    logger.info("Using aiogram 3.x with DefaultBotProperties")
+except ImportError:
+    # For older aiogram versions
+    bot = Bot(token=Config.BOT_TOKEN, parse_mode=ParseMode.HTML)
+    logger.info("Using aiogram with legacy parse_mode")
+
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
