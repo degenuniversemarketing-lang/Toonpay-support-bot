@@ -3,7 +3,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from sqlalchemy import select
 from database import get_db
-from models import AdminGroup
+from database import AdminGroup
 
 router = Router()
 
@@ -36,6 +36,7 @@ async def group_support(message: Message):
     
     await message.reply(
         "🎫 <b>Need help from ToonPay Support?</b>\n\n"
-        "Click the button below to open a private chat with our support bot and create a ticket.",
+        "Click the button below to open a private chat with our support bot and create a ticket.\n\n"
+        "⏱️ Response time: Within 24 hours",
         reply_markup=support_button
     )
