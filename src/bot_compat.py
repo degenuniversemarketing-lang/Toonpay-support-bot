@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sys
-import importlib
 from config import Config
 from database import init_db
 from middlewares.auth import GroupAuthMiddleware
@@ -28,6 +27,8 @@ try:
         token=Config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
     logger.info("Using aiogram 3.x with DefaultBotProperties")
     
 except ImportError:
@@ -38,6 +39,8 @@ except ImportError:
         from aiogram.fsm.storage.memory import MemoryStorage
         
         bot = Bot(token=Config.BOT_TOKEN, parse_mode=ParseMode.HTML)
+        storage = MemoryStorage()
+        dp = Dispatcher(storage=storage)
         logger.info("Using aiogram 3.x with legacy parse_mode")
         
     except ImportError:
@@ -58,20 +61,21 @@ except ImportError:
 # Import handlers
 from handlers import user, admin, super_admin, group
 
-# Register routers based on aiogram version
-if 'dp' not in locals():
-    # For aiogram 3.x
-    storage = MemoryStorage()
-    dp = Dispatcher(storage=storage)
-    
-    # Register middlewares
+# Register middlewares (for aiogram 3.x)
+if hasattr(dp, 'message') and hasattr(dp.message, 'middleware'):
     dp.message.middleware(GroupAuthMiddleware())
-    
-    # Register routers
+
+# Register routers
+if hasattr(dp, 'include_router'):
+    # aiogram 3.x
     dp.include_router(user.router)
     dp.include_router(group.router)
     dp.include_router(admin.router)
     dp.include_router(super_admin.router)
+else:
+    # aiogram 2.x
+    dp.register_message_handler(user.cmd_start, commands=['start'])
+    # Register more handlers as needed
 
 async def main():
     """Main function"""
