@@ -4,6 +4,10 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, BigInteger, Bool
 from datetime import datetime
 from config import Config
 import asyncpg
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Convert postgresql:// to postgresql+asyncpg://
 if Config.DATABASE_URL:
@@ -79,6 +83,7 @@ class BotCommand(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 async def get_db():
+    """Get database session"""
     async with AsyncSessionLocal() as session:
         try:
             yield session
