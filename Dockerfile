@@ -18,7 +18,6 @@ RUN python -c "import aiogram; print(f'aiogram version: {aiogram.__version__}')"
 
 # Copy source code
 COPY src/ ./src/
-COPY .env ./
 
 # Run the bot
 CMD ["python", "src/bot.py"]
