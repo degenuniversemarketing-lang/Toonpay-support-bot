@@ -15,6 +15,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global variables
+bot = None
+dp = None
+
 # Try different aiogram import methods
 try:
     # Method 1: aiogram 3.x with DefaultBotProperties
@@ -47,13 +51,13 @@ except ImportError:
         logger.error("Failed to import aiogram. Please install aiogram>=3.0.0")
         sys.exit(1)
 
-# Import handlers
+# Import handlers AFTER bot and dp are created
 from handlers import user, admin, super_admin, group
 
 # Register middlewares
 dp.message.middleware(GroupAuthMiddleware())
 
-# Register routers
+# Register routers - ONLY ONCE!
 dp.include_router(user.router)
 dp.include_router(group.router)
 dp.include_router(admin.router)
