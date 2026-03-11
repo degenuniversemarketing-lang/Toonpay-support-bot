@@ -73,7 +73,10 @@ async def main():
     from aiogram.types import BotCommand as BotCommandType
     commands = [
         BotCommandType(command="start", description="Start the bot"),
-        BotCommandType(command="support", description="Get support (works in groups)")
+        BotCommandType(command="support", description="Get support (works in groups)"),
+        BotCommandType(command="profile", description="View your profile"),
+        BotCommandType(command="update_email", description="Update your email"),
+        BotCommandType(command="update_phone", description="Update your phone number")
     ]
     await bot.set_my_commands(commands)
     
