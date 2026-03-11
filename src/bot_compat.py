@@ -51,7 +51,7 @@ except ImportError:
         logger.error("Failed to import aiogram. Please install aiogram>=3.0.0")
         sys.exit(1)
 
-# Import handlers AFTER bot and dp are created
+# Import handlers
 from handlers import user, admin, super_admin, group
 
 # Register middlewares
@@ -68,6 +68,14 @@ async def main():
     # Initialize database
     await init_db()
     logger.info("Database initialized")
+    
+    # Set bot commands
+    from aiogram.types import BotCommand as BotCommandType
+    commands = [
+        BotCommandType(command="start", description="Start the bot"),
+        BotCommandType(command="support", description="Get support (works in groups)")
+    ]
+    await bot.set_my_commands(commands)
     
     # Start polling
     logger.info("Starting bot...")
