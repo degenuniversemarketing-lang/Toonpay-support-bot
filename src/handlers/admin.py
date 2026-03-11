@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select, or_
 from database import get_db
-from models import Ticket, User
+from database import Ticket, User
 from keyboards.admin_keyboards import get_ticket_action_keyboard
 from utils.decorators import admin_group_only
 from config import Config
@@ -28,6 +28,7 @@ async def admin_reply_start(callback: CallbackQuery, state: FSMContext):
         reply_markup=None
     )
     await state.set_state(AdminReply.waiting_for_reply)
+    await callback.answer()
 
 @router.message(AdminReply.waiting_for_reply)
 async def admin_reply_send(message: Message, state: FSMContext):
@@ -184,11 +185,35 @@ async def search_user(message: Message):
 
 <b>📋 Recent Tickets:</b>
 """
-            for ticket in tickets[-3:]:  # Show last 3 tickets
+            for ticket in tickets[:3]:  # Show last 3 tickets
                 status_emoji = '🟢' if ticket.status == 'open' else '🟡' if ticket.status == 'in_progress' else '🔴'
-                response += f"\n{status_emoji} {ticket.ticket_id} - {ticket.category[:30]}"
-                response += f"\n   Created: {ticket.created_at.strftime('%Y-%m-%d')}"
+                response += f"\n{status_emoji} {ticket.ticket_id} - {ticket.category}"
+                response += f"\n   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}"
                 if ticket.admin_answer:
-                    response += f"\n   ✓ Answered"
+                    response += f"\n   ✓ Answered: {ticket.admin_answer[:50]}..."
+                response += "\n"
             
             await message.reply(response)
+
+@router.message(Command("tickets"))
+@admin_group_only()
+async def list_all_tickets(message: Message):
+    """List all open tickets"""
+    async for session in get_db():
+        result = await session.execute(
+            select(Ticket).where(Ticket.status.in_(['open', 'in_progress'])).order_by(Ticket.created_at.desc())
+        )
+        tickets = result.scalars().all()
+        
+        if not tickets:
+            await message.reply("📭 No open tickets")
+            return
+        
+        response = "<b>📋 Open Tickets:</b>\n\n"
+        for ticket in tickets[:10]:  # Show first 10
+            status_emoji = '🟢' if ticket.status == 'open' else '🟡'
+            response += f"{status_emoji} <code>{ticket.ticket_id}</code> - {ticket.category}\n"
+            response += f"   From: {ticket.name}\n"
+            response += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+        
+        await message.reply(response)
