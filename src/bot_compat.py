@@ -44,38 +44,20 @@ except ImportError:
         logger.info("Using aiogram 3.x with legacy parse_mode")
         
     except ImportError:
-        try:
-            # Method 3: aiogram 2.x
-            from aiogram import Bot, Dispatcher
-            from aiogram.contrib.fsm_storage.memory import MemoryStorage
-            
-            bot = Bot(token=Config.BOT_TOKEN, parse_mode="HTML")
-            storage = MemoryStorage()
-            dp = Dispatcher(bot, storage=storage)
-            logger.info("Using aiogram 2.x")
-            
-        except ImportError as e:
-            logger.error(f"Failed to import aiogram: {e}")
-            sys.exit(1)
+        logger.error("Failed to import aiogram. Please install aiogram>=3.0.0")
+        sys.exit(1)
 
 # Import handlers
 from handlers import user, admin, super_admin, group
 
-# Register middlewares (for aiogram 3.x)
-if hasattr(dp, 'message') and hasattr(dp.message, 'middleware'):
-    dp.message.middleware(GroupAuthMiddleware())
+# Register middlewares
+dp.message.middleware(GroupAuthMiddleware())
 
 # Register routers
-if hasattr(dp, 'include_router'):
-    # aiogram 3.x
-    dp.include_router(user.router)
-    dp.include_router(group.router)
-    dp.include_router(admin.router)
-    dp.include_router(super_admin.router)
-else:
-    # aiogram 2.x
-    dp.register_message_handler(user.cmd_start, commands=['start'])
-    # Register more handlers as needed
+dp.include_router(user.router)
+dp.include_router(group.router)
+dp.include_router(admin.router)
+dp.include_router(super_admin.router)
 
 async def main():
     """Main function"""
@@ -86,15 +68,9 @@ async def main():
     # Start polling
     logger.info("Starting bot...")
     try:
-        if hasattr(dp, 'start_polling'):
-            # aiogram 2.x
-            await dp.start_polling()
-        else:
-            # aiogram 3.x
-            await dp.start_polling(bot)
+        await dp.start_polling(bot)
     finally:
-        if hasattr(bot, 'session'):
-            await bot.session.close()
+        await bot.session.close()
         logger.info("Bot stopped")
 
 if __name__ == "__main__":
