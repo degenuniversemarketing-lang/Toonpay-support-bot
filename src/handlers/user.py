@@ -1,5 +1,12 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import (
+    ContextTypes, 
+    ConversationHandler, 
+    CommandHandler, 
+    CallbackQueryHandler, 
+    MessageHandler, 
+    filters
+)
 from src.database import db_session
 from src.models import User, Ticket, TicketReply, TicketStatus
 from src.utils.helpers import generate_ticket_number, format_user_info, format_ticket_info
@@ -292,7 +299,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Operation cancelled.", reply_markup=get_start_keyboard())
     return ConversationHandler.END
 
-# Conversation handler for ticket creation
+# Conversation handler for ticket creation - FIXED with per_message=False
 ticket_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(handle_callback, pattern="^new_ticket$")],
     states={
@@ -303,15 +310,19 @@ ticket_conv_handler = ConversationHandler(
         ENTERING_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question)],
     },
     fallbacks=[CommandHandler('cancel', cancel)],
-    name="ticket_creation"
+    name="ticket_creation",
+    persistent=True,
+    per_message=False
 )
 
-# Conversation handler for replies
+# Conversation handler for replies - FIXED with per_message=False
 reply_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(handle_callback, pattern="^reply_")],
     states={
         ENTERING_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply)],
     },
     fallbacks=[CommandHandler('cancel', cancel)],
-    name="user_reply"
+    name="user_reply",
+    persistent=True,
+    per_message=False
 )
