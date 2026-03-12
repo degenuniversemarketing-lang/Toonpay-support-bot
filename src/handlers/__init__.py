@@ -1,12 +1,6 @@
-# src/handlers/__init__.py
-from .user import UserHandlers
-from .admin import AdminHandlers
-from .super_admin import SuperAdminHandlers
-from .group import GroupHandlers
+from . import user
+from . import admin
+from . import super_admin
+from . import group
 
-__all__ = [
-    'UserHandlers',
-    'AdminHandlers', 
-    'SuperAdminHandlers',
-    'GroupHandlers'
-]
+__all__ = ['user', 'admin', 'super_admin', 'group']
