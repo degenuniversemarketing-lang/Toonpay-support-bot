@@ -5,6 +5,7 @@ Main bot application
 """
 
 import logging
+from telegram import Update, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,20 +14,17 @@ from telegram.ext import (
     filters,
     PicklePersistence
 )
-from telegram import BotCommand
 
 from src.config import Config
-from src.database import init_db, db_session
+from src.database import init_db
 from src.handlers import (
     user,
     admin,
     super_admin,
     group
 )
-from src.models import AllowedGroup
 
 # Set up logging
-logging.basicFormat = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
