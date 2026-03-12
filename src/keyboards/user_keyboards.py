@@ -1,28 +1,33 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config import Config
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from src.config import Config
 
-def get_categories_keyboard():
-    """Keyboard for ticket categories"""
-    builder = InlineKeyboardBuilder()
-    for category in Config.CATEGORIES:
-        builder.add(InlineKeyboardButton(
-            text=category,
-            callback_data=f"cat_{category}"
-        ))
-    builder.adjust(2)  # 2 buttons per row
-    return builder.as_markup()
-
-def get_main_menu_keyboard():
+def get_start_keyboard():
     """Main menu keyboard for users"""
-    buttons = [
-        [InlineKeyboardButton(text="🎫 New Ticket", callback_data="new_ticket")],
-        [InlineKeyboardButton(text="📋 My Tickets", callback_data="my_tickets")],
-        [InlineKeyboardButton(text="ℹ️ Help", callback_data="help")]
+    keyboard = [
+        [InlineKeyboardButton("🎫 New Ticket", callback_data="new_ticket")],
+        [InlineKeyboardButton("📋 My Tickets", callback_data="my_tickets")],
+        [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(keyboard)
 
-def get_cancel_keyboard():
-    """Cancel button for forms"""
-    buttons = [[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel")]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+def get_category_keyboard():
+    """Category selection keyboard"""
+    keyboard = []
+    for key, value in Config.CATEGORIES.items():
+        keyboard.append([InlineKeyboardButton(value, callback_data=f"cat_{key}")])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_ticket_action_keyboard(ticket_number: str):
+    """Keyboard for ticket actions"""
+    keyboard = [
+        [InlineKeyboardButton("📝 Add Reply", callback_data=f"reply_{ticket_number}")],
+        [InlineKeyboardButton("🔙 Back to Tickets", callback_data="my_tickets")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_support_button():
+    """Support button for group messages"""
+    keyboard = [
+        [InlineKeyboardButton("📩 Submit Ticket", url="https://t.me/your_bot_username?start=support")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
