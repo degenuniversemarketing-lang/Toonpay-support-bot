@@ -1,396 +1,317 @@
-# src/handlers/user.py
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from src.database import db_session
+from src.models import User, Ticket, TicketReply, TicketStatus
+from src.utils.helpers import generate_ticket_number, format_user_info, format_ticket_info
+from src.keyboards.user_keyboards import get_start_keyboard, get_category_keyboard, get_ticket_action_keyboard
+from src.utils.decorators import private_chat_only
 import logging
-from datetime import datetime
 
-from src.database import db
-from src.config import config
-from src.keyboards import (
-    get_main_keyboard, get_categories_keyboard,
-    get_confirmation_keyboard, get_user_tickets_keyboard
-)
-from src.utils import (
-    validate_email, validate_phone, format_ticket_info,
-    format_ticket_list, escape_html
-)
+# States
+SELECTING_CATEGORY, ENTERING_NAME, ENTERING_EMAIL, ENTERING_PHONE, ENTERING_QUESTION, ENTERING_REPLY = range(6)
 
 logger = logging.getLogger(__name__)
 
-# Conversation states
-NAME, EMAIL, PHONE, QUESTION, CONFIRM = range(5)
-
-class UserHandlers:
+@private_chat_only
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command in private chat"""
+    user = update.effective_user
     
-    @staticmethod
-    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command - only works in private"""
-        # Check if in private chat
-        if update.effective_chat.type != 'private':
-            # Delete message in groups
-            try:
-                await update.message.delete()
-            except:
-                pass
+    # Get or create user
+    db_user = db_session.query(User).filter_by(user_id=user.id).first()
+    if not db_user:
+        db_user = User(
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
+        )
+        db_session.add(db_user)
+        db_session.commit()
+    
+    # Check if this is from support button
+    args = context.args
+    if args and args[0] == "support":
+        context.user_data['from_group'] = True
+    
+    welcome_text = (
+        f"👋 Welcome to ToonPay Support, {user.first_name}!\n\n"
+        "How can we help you today? Please select an option below:"
+    )
+    
+    await update.message.reply_text(welcome_text, reply_markup=get_start_keyboard())
+    return ConversationHandler.END
+
+@private_chat_only
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callback queries"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "new_ticket":
+        await query.edit_message_text(
+            "Please select the category of your issue:",
+            reply_markup=get_category_keyboard()
+        )
+        return SELECTING_CATEGORY
+    
+    elif data == "my_tickets":
+        user_id = update.effective_user.id
+        tickets = db_session.query(Ticket).filter_by(user_id=user_id).order_by(Ticket.created_at.desc()).limit(10).all()
+        
+        if not tickets:
+            await query.edit_message_text(
+                "You haven't created any tickets yet.",
+                reply_markup=get_start_keyboard()
+            )
             return
         
-        user = update.effective_user
+        text = "📋 **Your Recent Tickets:**\n\n"
+        keyboard = []
         
-        # Check if started from group
-        if context.args and context.args[0] == 'group':
-            welcome_text = f"""
-👋 Welcome to {config.COMPANY_NAME} Support!
-
-You've been redirected from a group. Please create a ticket below and our support team will assist you.
-
-{config.SUPPORT_MESSAGE}
-"""
-        else:
-            welcome_text = f"""
-👋 Welcome to {config.COMPANY_NAME} Support!
-
-I'm here to help you with any issues you're experiencing.
-
-{config.SUPPORT_MESSAGE}
-
-Choose an option below to get started:
-"""
+        for ticket in tickets:
+            status_emoji = {
+                TicketStatus.OPEN: '🟢',
+                TicketStatus.IN_PROGRESS: '🟡',
+                TicketStatus.CLOSED: '🔴',
+                TicketStatus.PENDING: '⏳'
+            }.get(ticket.status, '⚪')
+            
+            text += f"{status_emoji} Ticket #{ticket.ticket_number}\n"
+            text += f"Category: {ticket.category}\n"
+            text += f"Status: {ticket.status.value}\n"
+            text += f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+            
+            keyboard.append([InlineKeyboardButton(
+                f"View #{ticket.ticket_number}",
+                callback_data=f"view_ticket_{ticket.id}"
+            )])
         
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=get_main_keyboard()
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
+    elif data.startswith("cat_"):
+        category = data.replace("cat_", "")
+        context.user_data['ticket_category'] = category
+        await query.edit_message_text(
+            "Please enter your full name:"
+        )
+        return ENTERING_NAME
+    
+    elif data.startswith("view_ticket_"):
+        ticket_id = int(data.replace("view_ticket_", ""))
+        ticket = db_session.query(Ticket).get(ticket_id)
+        
+        if not ticket:
+            await query.edit_message_text("Ticket not found.", reply_markup=get_start_keyboard())
+            return
+        
+        text = format_ticket_info(ticket)
+        await query.edit_message_text(
+            text,
+            reply_markup=get_ticket_action_keyboard(ticket.ticket_number),
+            parse_mode='Markdown'
         )
     
-    @staticmethod
-    async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle callback queries"""
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        
-        if data == 'new_ticket':
-            # Start new ticket creation
-            context.user_data.clear()
-            await query.edit_message_text(
-                "📝 <b>Please enter your full name:</b>\n\n"
-                "Example: John Doe",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ Cancel", callback_data='cancel')
-                ]])
-            )
-            return NAME
-        
-        elif data == 'my_tickets':
-            # Show user's tickets
-            user_id = update.effective_user.id
-            tickets = db.get_user_tickets(user_id, limit=10)
-            
-            if tickets:
-                text = format_ticket_list(tickets, "📋 Your Tickets")
-                await query.edit_message_text(
-                    text,
-                    reply_markup=get_user_tickets_keyboard(tickets),
-                    parse_mode='HTML'
-                )
-            else:
-                await query.edit_message_text(
-                    "📭 You haven't created any tickets yet.\n\n"
-                    "Click 'New Ticket' to create your first ticket.",
-                    reply_markup=get_main_keyboard()
-                )
-        
-        elif data == 'help':
-            help_text = f"""
-ℹ️ <b>Help & Support</b>
-
-<b>How to create a ticket:</b>
-1. Click 'New Ticket'
-2. Select issue category
-3. Provide your details
-4. Describe your issue
-5. Submit
-
-<b>Important Notes:</b>
-• Each ticket is for one issue only
-• Tickets close after admin reply
-• Create new ticket for new questions
-• Response Time: Within 24 hours
-
-{config.SUPPORT_MESSAGE}
-"""
-            await query.edit_message_text(
-                help_text,
-                parse_mode='HTML',
-                reply_markup=get_main_keyboard()
-            )
-        
-        elif data == 'main_menu':
-            await query.edit_message_text(
-                f"👋 Welcome back!\n\n{config.SUPPORT_MESSAGE}",
-                reply_markup=get_main_keyboard()
-            )
-        
-        elif data == 'cancel':
-            context.user_data.clear()
-            await query.edit_message_text(
-                "❌ Operation cancelled.",
-                reply_markup=get_main_keyboard()
-            )
-            return ConversationHandler.END
-        
-        elif data.startswith('cat_'):
-            # Category selected
-            category = data.replace('cat_', '')
-            context.user_data['category'] = category
-            
-            category_info = config.CATEGORIES.get(category, {'name': category})
-            
-            await query.edit_message_text(
-                f"📝 <b>Describe your issue</b>\n\n"
-                f"Category: {category_info['name']}\n\n"
-                f"Please provide details about your issue:",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ Cancel", callback_data='cancel')
-                ]])
-            )
-            return QUESTION
-        
-        elif data.startswith('view_ticket_'):
-            # View specific ticket
-            ticket_id = data.replace('view_ticket_', '')
-            ticket = db.get_ticket(ticket_id)
-            
-            if ticket:
-                text = format_ticket_info(ticket, include_admin=True)
-                keyboard = [[
-                    InlineKeyboardButton("🔙 Back to Tickets", callback_data='my_tickets')
-                ]]
-                await query.edit_message_text(
-                    text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='HTML'
-                )
-    
-    @staticmethod
-    async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get user's full name"""
-        # Delete user's message for privacy
-        try:
-            await update.message.delete()
-        except:
-            pass
-        
-        name = update.message.text.strip()
-        
-        if len(name) < 2:
-            await update.message.reply_text(
-                "❌ Please enter a valid name (minimum 2 characters):"
-            )
-            return NAME
-        
-        context.user_data['full_name'] = name
-        
-        await update.message.reply_text(
-            "📧 <b>Please enter your email address:</b>\n\n"
-            "Example: user@example.com",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data='cancel')
-            ]])
+    elif data.startswith("reply_"):
+        ticket_number = data.replace("reply_", "")
+        context.user_data['reply_ticket'] = ticket_number
+        await query.edit_message_text(
+            "Please type your reply message:"
         )
-        return EMAIL
+        return ENTERING_REPLY
     
-    @staticmethod
-    async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get user's email"""
-        try:
-            await update.message.delete()
-        except:
-            pass
-        
-        email = update.message.text.strip()
-        
-        if not validate_email(email):
-            await update.message.reply_text(
-                "❌ Invalid email format. Please enter a valid email:"
-            )
-            return EMAIL
-        
-        context.user_data['email'] = email
-        
-        await update.message.reply_text(
-            "📱 <b>Please enter your phone number:</b>\n\n"
-            "Example: +1234567890",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data='cancel')
-            ]])
+    elif data == "back_to_main":
+        await query.edit_message_text(
+            "Main Menu:",
+            reply_markup=get_start_keyboard()
         )
-        return PHONE
     
-    @staticmethod
-    async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get user's phone number"""
-        try:
-            await update.message.delete()
-        except:
-            pass
-        
-        phone = update.message.text.strip()
-        
-        if not validate_phone(phone):
-            await update.message.reply_text(
-                "❌ Invalid phone format. Please enter a valid phone number:"
-            )
-            return PHONE
-        
-        context.user_data['phone'] = phone
-        
-        # Show categories
-        await update.message.reply_text(
-            "📋 <b>Select Issue Category:</b>",
-            parse_mode='HTML',
-            reply_markup=get_categories_keyboard()
+    elif data == "help":
+        help_text = (
+            "📚 **How to Use ToonPay Support Bot**\n\n"
+            "• Click 'New Ticket' to create a support ticket\n"
+            "• Select the appropriate category for your issue\n"
+            "• Provide your details and describe your problem\n"
+            "• You'll receive updates when admins respond\n"
+            "• Each ticket is for one issue only\n"
+            "• Tickets close after admin reply\n"
+            "• Response time: Within 24 hours 🚀\n\n"
+            "For urgent issues, please contact support@toonpay.com"
         )
+        await query.edit_message_text(help_text, reply_markup=get_start_keyboard(), parse_mode='Markdown')
+
+@private_chat_only
+async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user name input"""
+    name = update.message.text
+    context.user_data['ticket_name'] = name
+    
+    await update.message.reply_text("Please enter your email address:")
+    return ENTERING_EMAIL
+
+@private_chat_only
+async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user email input"""
+    email = update.message.text
+    context.user_data['ticket_email'] = email
+    
+    await update.message.reply_text("Please enter your phone number (with country code):")
+    return ENTERING_PHONE
+
+@private_chat_only
+async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user phone input"""
+    phone = update.message.text
+    context.user_data['ticket_phone'] = phone
+    
+    await update.message.reply_text(
+        "Please describe your issue in detail:\n"
+        "Include any relevant information that might help us assist you better."
+    )
+    return ENTERING_QUESTION
+
+@private_chat_only
+async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user question and create ticket"""
+    question = update.message.text
+    user = update.effective_user
+    
+    # Update user details in database
+    db_user = db_session.query(User).filter_by(user_id=user.id).first()
+    if db_user:
+        db_user.name = context.user_data.get('ticket_name', db_user.name)
+        db_user.email = context.user_data.get('ticket_email', db_user.email)
+        db_user.phone = context.user_data.get('ticket_phone', db_user.phone)
+        db_user.last_active = update.message.date
+    
+    # Create ticket
+    ticket = Ticket(
+        ticket_number=generate_ticket_number(),
+        user_id=user.id,
+        category=context.user_data.get('ticket_category', 'other'),
+        question=question,
+        status=TicketStatus.OPEN
+    )
+    
+    db_session.add(ticket)
+    db_session.commit()
+    
+    # Send confirmation to user
+    await update.message.reply_text(
+        f"✅ **Ticket Created Successfully!**\n\n"
+        f"Ticket Number: `{ticket.ticket_number}`\n"
+        f"Category: {ticket.category}\n\n"
+        f"Your ticket has been submitted. Our support team will get back to you within 24 hours.\n"
+        f"You can check your ticket status anytime using 'My Tickets' option.",
+        parse_mode='Markdown',
+        reply_markup=get_start_keyboard()
+    )
+    
+    # Forward to admin group
+    try:
+        admin_text = (
+            f"🆕 **New Support Ticket**\n\n"
+            f"Ticket: #{ticket.ticket_number}\n"
+            f"User: {db_user.name or 'N/A'} (@{user.username or 'N/A'})\n"
+            f"User ID: `{user.id}`\n"
+            f"Category: {ticket.category}\n"
+            f"Email: {db_user.email or 'N/A'}\n"
+            f"Phone: {db_user.phone or 'N/A'}\n\n"
+            f"**Question:**\n{question}\n\n"
+            f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+        
+        from src.keyboards.admin_keyboards import get_ticket_admin_keyboard
+        await context.bot.send_message(
+            chat_id=context.bot_data.get('admin_group_id'),
+            text=admin_text,
+            reply_markup=get_ticket_admin_keyboard(ticket.ticket_number, user.id),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Failed to forward to admin group: {e}")
+    
+    # Clear user data
+    for key in ['ticket_category', 'ticket_name', 'ticket_email', 'ticket_phone']:
+        context.user_data.pop(key, None)
+    
+    return ConversationHandler.END
+
+@private_chat_only
+async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user reply to ticket"""
+    reply_text = update.message.text
+    ticket_number = context.user_data.get('reply_ticket')
+    
+    if not ticket_number:
+        await update.message.reply_text("Session expired. Please start over.")
         return ConversationHandler.END
     
-    @staticmethod
-    async def get_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get user's question and confirm"""
-        try:
-            await update.message.delete()
-        except:
-            pass
-        
-        question = update.message.text.strip()
-        
-        if len(question) < 10:
-            await update.message.reply_text(
-                "❌ Please provide more details (minimum 10 characters):"
-            )
-            return QUESTION
-        
-        context.user_data['question'] = question
-        
-        # Show confirmation
-        category = context.user_data.get('category', 'other')
-        category_info = config.CATEGORIES.get(category, {'name': category})
-        
-        confirm_text = f"""
-✅ <b>Please confirm your ticket details:</b>
-
-<b>Name:</b> {escape_html(context.user_data['full_name'])}
-<b>Email:</b> {escape_html(context.user_data['email'])}
-<b>Phone:</b> {escape_html(context.user_data['phone'])}
-<b>Category:</b> {category_info['name']}
-
-<b>Question:</b>
-{escape_html(question)}
-
-Is everything correct?
-"""
-        
-        await update.message.reply_text(
-            confirm_text,
-            parse_mode='HTML',
-            reply_markup=get_confirmation_keyboard()
-        )
-        return CONFIRM
+    ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
     
-    @staticmethod
-    async def confirm_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Confirm and create ticket"""
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data == 'confirm_yes':
-            # Create ticket
-            user = update.effective_user
-            user_id = user.id
-            username = user.username or "NoUsername"
-            
-            # Save user to database
-            db.get_or_create_user(
-                user_id=user_id,
-                username=username,
-                full_name=context.user_data['full_name'],
-                email=context.user_data['email'],
-                phone=context.user_data['phone']
-            )
-            
-            # Create ticket
-            ticket = db.create_ticket(
-                user_id=user_id,
-                category=context.user_data['category'],
-                question=context.user_data['question']
-            )
-            
-            # Send confirmation to user
-            await query.edit_message_text(
-                f"✅ <b>Ticket Created Successfully!</b>\n\n"
-                f"Your ticket ID: <code>{ticket.ticket_id}</code>\n\n"
-                f"We'll get back to you soon.\n\n"
-                f"{config.SUPPORT_MESSAGE}",
-                parse_mode='HTML',
-                reply_markup=get_main_keyboard()
-            )
-            
-            # Notify admin group
-            await UserHandlers.notify_admin_group(context, ticket, user)
-            
-            # Clear user data
-            context.user_data.clear()
-            
-        else:
-            await query.edit_message_text(
-                "❌ Ticket creation cancelled.",
-                reply_markup=get_main_keyboard()
-            )
-            context.user_data.clear()
-        
+    if not ticket:
+        await update.message.reply_text("Ticket not found.")
         return ConversationHandler.END
     
-    @staticmethod
-    async def notify_admin_group(context: ContextTypes.DEFAULT_TYPE, ticket, user):
-        """Notify admin group about new ticket"""
-        try:
-            from src.keyboards import get_ticket_action_keyboard
-            
-            user_info = db.get_user(user.id)
-            category_info = config.CATEGORIES.get(ticket.category, {'name': ticket.category, 'emoji': '📌'})
-            
-            admin_text = f"""
-🎫 <b>NEW TICKET</b>
+    # Save reply
+    reply = TicketReply(
+        ticket_id=ticket.id,
+        admin_id=update.effective_user.id,
+        admin_username=update.effective_user.username or "User",
+        message=reply_text
+    )
+    
+    db_session.add(reply)
+    ticket.status = TicketStatus.OPEN
+    db_session.commit()
+    
+    await update.message.reply_text(
+        f"✅ Your reply has been added to ticket #{ticket_number}.\n"
+        f"Support team will get back to you soon.",
+        reply_markup=get_start_keyboard()
+    )
+    
+    # Notify admin group
+    try:
+        await context.bot.send_message(
+            chat_id=context.bot_data.get('admin_group_id'),
+            text=f"📝 User replied to ticket #{ticket_number}\n\nReply: {reply_text}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify admin group: {e}")
+    
+    context.user_data.pop('reply_ticket', None)
+    return ConversationHandler.END
 
-<b>Ticket ID:</b> <code>{ticket.ticket_id}</code>
-<b>Status:</b> 🟢 Open
+@private_chat_only
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel conversation"""
+    await update.message.reply_text("Operation cancelled.", reply_markup=get_start_keyboard())
+    return ConversationHandler.END
 
-👤 <b>User Details:</b>
-• ID: <code>{user.id}</code>
-• Username: @{user.username if user.username else 'N/A'}
-• Name: {escape_html(user_info.full_name)}
-• Email: {escape_html(user_info.email)}
-• Phone: {escape_html(user_info.phone)}
+# Conversation handler for ticket creation
+ticket_conv_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(handle_callback, pattern="^new_ticket$")],
+    states={
+        SELECTING_CATEGORY: [CallbackQueryHandler(handle_callback, pattern="^cat_")],
+        ENTERING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_name)],
+        ENTERING_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email)],
+        ENTERING_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone)],
+        ENTERING_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel)],
+    name="ticket_creation"
+)
 
-📋 <b>Ticket Details:</b>
-• Category: {category_info['emoji']} {category_info['name']}
-• Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M:%S')}
-
-📝 <b>Issue Description:</b>
-{escape_html(ticket.question)}
-
-<b>Response Time:</b> Within 24 hours
-"""
-            
-            await context.bot.send_message(
-                chat_id=config.ADMIN_GROUP_ID,
-                text=admin_text,
-                reply_markup=get_ticket_action_keyboard(ticket.ticket_id, ticket.status),
-                parse_mode='HTML'
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to notify admin group: {e}")
+# Conversation handler for replies
+reply_conv_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(handle_callback, pattern="^reply_")],
+    states={
+        ENTERING_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel)],
+    name="user_reply"
+)
