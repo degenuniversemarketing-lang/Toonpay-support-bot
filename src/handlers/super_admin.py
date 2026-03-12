@@ -1,515 +1,288 @@
-# src/handlers/super_admin.py
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from src.database import db_session
+from src.models import AllowedGroup, User, Ticket
+from src.utils.decorators import super_admin_only, private_chat_only
+from src.config import Config
 import logging
-from datetime import datetime
-import io
-import csv
-
-from src.database import db
-from src.config import config
-from src.keyboards import (
-    get_super_admin_keyboard, get_export_keyboard,
-    get_admin_management_keyboard, get_group_management_keyboard
-)
-from src.utils import (
-    format_statistics, create_excel_export, escape_html
-)
-from src.backup import BackupManager
 
 logger = logging.getLogger(__name__)
 
-# Conversation states
-ADD_ADMIN_ID = 0
-REMOVE_ADMIN_ID = 1
-ADD_GROUP_ID = 2
-REMOVE_GROUP_ID = 3
-BROADCAST_TEXT = 4
+@super_admin_only
+@private_chat_only
+async def super_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Super admin control panel"""
+    text = (
+        "👑 **Super Admin Control Panel**\n\n"
+        "**Group Management:**\n"
+        "/addgroup <group_id> - Add allowed group\n"
+        "/removegroup <group_id> - Remove allowed group\n"
+        "/listgroups - List all allowed groups\n\n"
+        "**Bot Management:**\n"
+        "/broadcast <message> - Send message to all users\n"
+        "/stats - Detailed statistics\n"
+        "/settings - Bot settings\n"
+        "/backup - Backup database\n"
+        "/restore - Restore from backup\n\n"
+        "**Category Management:**\n"
+        "/addcategory <key> <name> - Add new category\n"
+        "/removecategory <key> - Remove category\n"
+        "/listcategories - List all categories"
+    )
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-class SuperAdminHandlers:
+@super_admin_only
+@private_chat_only
+async def add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add a group to allowed list"""
+    if not context.args:
+        await update.message.reply_text("Usage: /addgroup <group_id>")
+        return
     
-    @staticmethod
-    async def check_super_admin(update: Update) -> bool:
-        """Check if user is super admin"""
-        user_id = update.effective_user.id
-        return user_id in config.SUPER_ADMIN_IDS or db.is_super_admin(user_id)
-    
-    @staticmethod
-    async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /panel command - Super admin panel"""
-        if not await SuperAdminHandlers.check_super_admin(update):
-            await update.message.reply_text("❌ You are not authorized to use this command.")
+    try:
+        group_id = int(context.args[0])
+        
+        # Check if already exists
+        existing = db_session.query(AllowedGroup).filter_by(group_id=group_id).first()
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                db_session.commit()
+                await update.message.reply_text(f"✅ Group {group_id} reactivated.")
+            else:
+                await update.message.reply_text(f"⚠️ Group {group_id} is already allowed.")
             return
         
-        await update.message.reply_text(
-            "👑 <b>Super Admin Control Panel</b>\n\n"
-            "Welcome to the master control panel. Select an option below:",
-            reply_markup=get_super_admin_keyboard(),
-            parse_mode='HTML'
+        # Get group info
+        try:
+            chat = await context.bot.get_chat(group_id)
+            group_title = chat.title
+        except:
+            group_title = "Unknown"
+        
+        new_group = AllowedGroup(
+            group_id=group_id,
+            group_title=group_title,
+            added_by=update.effective_user.id
         )
-    
-    @staticmethod
-    async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle super admin callback queries"""
-        query = update.callback_query
-        await query.answer()
         
-        if not await SuperAdminHandlers.check_super_admin(update):
-            await query.edit_message_text("❌ You are not authorized.")
-            return
+        db_session.add(new_group)
+        db_session.commit()
         
-        data = query.data
+        await update.message.reply_text(f"✅ Group '{group_title}' ({group_id}) added to allowed list.")
         
-        if data == 'sa_stats':
-            stats = db.get_statistics()
-            text = format_statistics(stats)
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data='sa_back')
-                ]]),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'sa_all_tickets':
-            tickets = db.get_all_tickets(limit=100)
-            
-            if tickets:
-                text = "📋 <b>All Tickets (Last 100)</b>\n\n"
-                for ticket in tickets:
-                    status_emoji = config.STATUS_EMOJIS.get(ticket.status, '⚪')
-                    user = db.get_user(ticket.user_id)
-                    username = f"@{user.username}" if user and user.username else "N/A"
-                    text += f"{status_emoji} <code>{ticket.ticket_id}</code> - {username}\n"
-                    text += f"   Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-            else:
-                text = "📭 No tickets found."
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data='sa_back')
-                ]]),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'sa_manage_admins':
-            admins = db.get_all_admins()
-            
-            text = "👥 <b>Admin List</b>\n\n"
-            for admin in admins:
-                text += f"• ID: <code>{admin.user_id}</code>\n"
-                text += f"  Username: @{admin.username}\n"
-                text += f"  Added: {admin.added_at.strftime('%Y-%m-%d')}\n"
-                text += f"  Super: {'✅' if admin.is_super_admin else '❌'}\n"
-                text += f"  Tickets: {admin.tickets_handled}\n\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=get_admin_management_keyboard(),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'sa_manage_groups':
-            groups = db.get_allowed_groups()
-            
-            text = "👥 <b>Allowed Groups</b>\n\n"
-            for group in groups:
-                text += f"• Group ID: <code>{group.group_id}</code>\n"
-                text += f"  Title: {escape_html(group.group_title)}\n"
-                text += f"  Added: {group.added_at.strftime('%Y-%m-%d')}\n\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=get_group_management_keyboard(),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'add_admin':
-            await query.edit_message_text(
-                "📝 <b>Add New Admin</b>\n\n"
-                "Send me the user ID of the new admin:",
-                parse_mode='HTML'
-            )
-            return ADD_ADMIN_ID
-        
-        elif data == 'remove_admin':
-            await query.edit_message_text(
-                "📝 <b>Remove Admin</b>\n\n"
-                "Send me the user ID of the admin to remove:",
-                parse_mode='HTML'
-            )
-            return REMOVE_ADMIN_ID
-        
-        elif data == 'list_admins':
-            admins = db.get_all_admins()
-            
-            text = "👥 <b>Admin List</b>\n\n"
-            for admin in admins:
-                text += f"• ID: <code>{admin.user_id}</code> - @{admin.username}\n"
-                text += f"  Added: {admin.added_at.strftime('%Y-%m-%d')}\n"
-                text += f"  Status: {'✅ Active' if admin.is_active else '❌ Inactive'}\n\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data='sa_manage_admins')
-                ]]),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'add_group':
-            await query.edit_message_text(
-                "📝 <b>Add Group</b>\n\n"
-                "Send me the group ID to add:",
-                parse_mode='HTML'
-            )
-            return ADD_GROUP_ID
-        
-        elif data == 'remove_group':
-            await query.edit_message_text(
-                "📝 <b>Remove Group</b>\n\n"
-                "Send me the group ID to remove:",
-                parse_mode='HTML'
-            )
-            return REMOVE_GROUP_ID
-        
-        elif data == 'list_groups':
-            groups = db.get_allowed_groups()
-            
-            text = "👥 <b>Allowed Groups</b>\n\n"
-            for group in groups:
-                text += f"• Group ID: <code>{group.group_id}</code>\n"
-                text += f"  Title: {escape_html(group.group_title)}\n"
-                text += f"  Added: {group.added_at.strftime('%Y-%m-%d')}\n\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data='sa_manage_groups')
-                ]]),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'sa_export':
-            await query.edit_message_text(
-                "📤 <b>Export Data</b>\n\n"
-                "Select the type of data to export:",
-                reply_markup=get_export_keyboard(),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'export_users':
-            users = db.get_all_users()
-            
-            # Create CSV
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow(['User ID', 'Username', 'Full Name', 'Email', 'Phone', 'Registered', 'Total Tickets'])
-            
-            for user in users:
-                writer.writerow([
-                    user.user_id,
-                    user.username,
-                    user.full_name,
-                    user.email,
-                    user.phone,
-                    user.registered_at,
-                    user.total_tickets
-                ])
-            
-            output.seek(0)
-            
-            await query.message.reply_document(
-                document=io.BytesIO(output.getvalue().encode()),
-                filename=f'users_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
-                caption="✅ Users export completed!"
-            )
-        
-        elif data == 'export_tickets':
-            tickets = db.get_all_tickets(limit=5000)
-            
-            # Create CSV
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow(['Ticket ID', 'User ID', 'Category', 'Question', 'Admin Reply', 
-                           'Status', 'Created', 'Closed', 'Assigned To'])
-            
-            for ticket in tickets:
-                writer.writerow([
-                    ticket.ticket_id,
-                    ticket.user_id,
-                    ticket.category,
-                    ticket.question,
-                    ticket.admin_reply,
-                    ticket.status,
-                    ticket.created_at,
-                    ticket.closed_at,
-                    ticket.assigned_to
-                ])
-            
-            output.seek(0)
-            
-            await query.message.reply_document(
-                document=io.BytesIO(output.getvalue().encode()),
-                filename=f'tickets_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
-                caption="✅ Tickets export completed!"
-            )
-        
-        elif data == 'export_complete':
-            users = db.get_all_users()
-            tickets = db.get_all_tickets(limit=5000)
-            
-            excel_data = create_excel_export(users, tickets)
-            
-            await query.message.reply_document(
-                document=io.BytesIO(excel_data),
-                filename=f'complete_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx',
-                caption="✅ Complete export completed!"
-            )
-        
-        elif data == 'sa_broadcast':
-            await query.edit_message_text(
-                "📢 <b>Broadcast Message</b>\n\n"
-                "Send me the message you want to broadcast to all users:",
-                parse_mode='HTML'
-            )
-            return BROADCAST_TEXT
-        
-        elif data == 'sa_backup':
-            await query.edit_message_text(
-                "💾 <b>Creating backup...</b>\n\n"
-                "Please wait, this may take a moment.",
-                parse_mode='HTML'
-            )
-            
-            # Create backup
-            backup_file = BackupManager.create_backup()
-            
-            if backup_file:
-                await query.message.reply_document(
-                    document=open(backup_file, 'rb'),
-                    filename=f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.sql',
-                    caption="✅ Backup created successfully!"
-                )
-                
-                # Save backup record
-                import os
-                db.save_backup_record(
-                    filename=os.path.basename(backup_file),
-                    size=os.path.getsize(backup_file)
-                )
-            else:
-                await query.message.reply_text("❌ Backup failed.")
-        
-        elif data == 'sa_settings':
-            settings_text = f"""
-⚙️ <b>System Settings</b>
+    except ValueError:
+        await update.message.reply_text("❌ Invalid group ID. Must be a number.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
 
-<b>Bot Configuration:</b>
-• Bot Username: {config.BOT_USERNAME}
-• Admin Group: <code>{config.ADMIN_GROUP_ID}</code>
-• Backup Group: <code>{config.BACKUP_GROUP_ID}</code>
+@super_admin_only
+@private_chat_only
+async def remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a group from allowed list"""
+    if not context.args:
+        await update.message.reply_text("Usage: /removegroup <group_id>")
+        return
+    
+    try:
+        group_id = int(context.args[0])
+        group = db_session.query(AllowedGroup).filter_by(group_id=group_id).first()
+        
+        if group:
+            group.is_active = False
+            db_session.commit()
+            await update.message.reply_text(f"✅ Group {group_id} removed from allowed list.")
+        else:
+            await update.message.reply_text(f"❌ Group {group_id} not found in allowed list.")
+            
+    except ValueError:
+        await update.message.reply_text("❌ Invalid group ID. Must be a number.")
 
-<b>Backup Settings:</b>
-• Auto Backup: {'✅ Enabled' if config.ENABLE_AUTO_BACKUP else '❌ Disabled'}
-• Backup Interval: {config.BACKUP_INTERVAL_HOURS} hours
+@super_admin_only
+@private_chat_only
+async def list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all allowed groups"""
+    groups = db_session.query(AllowedGroup).filter_by(is_active=True).all()
+    
+    if not groups:
+        await update.message.reply_text("No groups are currently allowed.")
+        return
+    
+    text = "📋 **Allowed Groups:**\n\n"
+    for group in groups:
+        text += f"• {group.group_title} - `{group.group_id}`\n"
+        text += f"  Added: {group.added_at.strftime('%Y-%m-%d')}\n\n"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-<b>Support Settings:</b>
-• Company: {config.COMPANY_NAME}
-• Support Email: {config.SUPPORT_EMAIL}
-"""
-            
-            await query.edit_message_text(
-                settings_text,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data='sa_back')
-                ]]),
-                parse_mode='HTML'
-            )
-        
-        elif data == 'sa_back':
-            await query.edit_message_text(
-                "👑 <b>Super Admin Control Panel</b>\n\n"
-                "Welcome back to the master control panel.",
-                reply_markup=get_super_admin_keyboard(),
-                parse_mode='HTML'
-            )
-        
-        return ConversationHandler.END
+@super_admin_only
+@private_chat_only
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Broadcast message to all users"""
+    if not context.args:
+        await update.message.reply_text("Usage: /broadcast <message>")
+        return
     
-    @staticmethod
-    async def handle_add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle adding new admin"""
-        if not await SuperAdminHandlers.check_super_admin(update):
-            return ConversationHandler.END
-        
+    message = ' '.join(context.args)
+    
+    # Get all users
+    users = db_session.query(User).all()
+    total = len(users)
+    successful = 0
+    failed = 0
+    
+    await update.message.reply_text(f"📢 Broadcasting to {total} users...")
+    
+    for user in users:
         try:
-            admin_id = int(update.message.text.strip())
-            
-            # Get user info
-            try:
-                chat = await context.bot.get_chat(admin_id)
-                username = chat.username or "NoUsername"
-            except:
-                username = "Unknown"
-            
-            db.add_admin(admin_id, username, update.effective_user.id)
-            
-            await update.message.reply_text(
-                f"✅ Admin {admin_id} (@{username}) added successfully!"
+            await context.bot.send_message(
+                chat_id=user.user_id,
+                text=f"📢 **Announcement:**\n\n{message}"
             )
-            
-            # Log action
-            db.log_action(
-                update.effective_user.id,
-                'add_admin',
-                {'admin_id': admin_id, 'username': username}
-            )
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID. Please send a number.")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}")
+            successful += 1
+        except:
+            failed += 1
         
-        return ConversationHandler.END
+        # Small delay to avoid flood limits
+        await asyncio.sleep(0.05)
     
-    @staticmethod
-    async def handle_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle removing admin"""
-        if not await SuperAdminHandlers.check_super_admin(update):
-            return ConversationHandler.END
-        
-        try:
-            admin_id = int(update.message.text.strip())
-            
-            if admin_id in config.SUPER_ADMIN_IDS:
-                await update.message.reply_text("❌ Cannot remove super admin.")
-                return ConversationHandler.END
-            
-            db.remove_admin(admin_id)
-            
-            await update.message.reply_text(
-                f"✅ Admin {admin_id} removed successfully."
-            )
-            
-            # Log action
-            db.log_action(
-                update.effective_user.id,
-                'remove_admin',
-                {'admin_id': admin_id}
-            )
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID. Please send a number.")
-        
-        return ConversationHandler.END
+    await update.message.reply_text(
+        f"✅ Broadcast complete!\n"
+        f"Total: {total}\n"
+        f"Success: {successful}\n"
+        f"Failed: {failed}"
+    )
+
+@super_admin_only
+@private_chat_only
+async def super_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Detailed statistics for super admin"""
+    from datetime import datetime, timedelta
     
-    @staticmethod
-    async def handle_add_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle adding group"""
-        if not await SuperAdminHandlers.check_super_admin(update):
-            return ConversationHandler.END
-        
-        try:
-            group_id = int(update.message.text.strip())
-            
-            # Try to get group info
-            try:
-                chat = await context.bot.get_chat(group_id)
-                group_title = chat.title or "Unknown Group"
-            except:
-                group_title = "Unknown Group"
-            
-            db.add_allowed_group(group_id, group_title, update.effective_user.id)
-            
-            await update.message.reply_text(
-                f"✅ Group {group_id} ({group_title}) added successfully!"
-            )
-            
-            # Log action
-            db.log_action(
-                update.effective_user.id,
-                'add_group',
-                {'group_id': group_id, 'title': group_title}
-            )
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid group ID. Please send a number.")
-        
-        return ConversationHandler.END
+    # Basic counts
+    total_users = db_session.query(User).count()
+    total_tickets = db_session.query(Ticket).count()
     
-    @staticmethod
-    async def handle_remove_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle removing group"""
-        if not await SuperAdminHandlers.check_super_admin(update):
-            return ConversationHandler.END
-        
-        try:
-            group_id = int(update.message.text.strip())
-            
-            db.remove_allowed_group(group_id)
-            
-            await update.message.reply_text(
-                f"✅ Group {group_id} removed successfully."
-            )
-            
-            # Log action
-            db.log_action(
-                update.effective_user.id,
-                'remove_group',
-                {'group_id': group_id}
-            )
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid group ID. Please send a number.")
-        
-        return ConversationHandler.END
+    # Active users (last 7 days)
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    active_users = db_session.query(User).filter(User.last_active >= week_ago).count()
     
-    @staticmethod
-    async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle broadcast message"""
-        if not await SuperAdminHandlers.check_super_admin(update):
-            return ConversationHandler.END
+    # Tickets by status
+    open_tickets = db_session.query(Ticket).filter_by(status='open').count()
+    in_progress = db_session.query(Ticket).filter_by(status='in_progress').count()
+    closed_tickets = db_session.query(Ticket).filter_by(status='closed').count()
+    
+    # Tickets by category
+    categories = {}
+    for cat_key, cat_name in Config.CATEGORIES.items():
+        count = db_session.query(Ticket).filter_by(category=cat_key).count()
+        categories[cat_name] = count
+    
+    # Daily ticket stats (last 7 days)
+    daily_stats = []
+    for i in range(7):
+        day = datetime.utcnow().date() - timedelta(days=i)
+        count = db_session.query(Ticket).filter(
+            Ticket.created_at >= day,
+            Ticket.created_at < day + timedelta(days=1)
+        ).count()
+        daily_stats.append(f"{day.strftime('%m/%d')}: {count}")
+    
+    text = (
+        f"📊 **Super Admin Statistics**\n\n"
+        f"**Users:**\n"
+        f"Total: {total_users}\n"
+        f"Active (7d): {active_users}\n\n"
+        f"**Tickets:**\n"
+        f"Total: {total_tickets}\n"
+        f"🟢 Open: {open_tickets}\n"
+        f"🟡 In Progress: {in_progress}\n"
+        f"🔴 Closed: {closed_tickets}\n\n"
+        f"**Categories:**\n"
+    )
+    
+    for cat_name, count in categories.items():
+        text += f"• {cat_name}: {count}\n"
+    
+    text += f"\n**Daily Tickets (Last 7 days):**\n"
+    text += '\n'.join(reversed(daily_stats))
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+@super_admin_only
+@private_chat_only
+async def backup_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create database backup"""
+    await update.message.reply_text("🔄 Creating backup...")
+    
+    # Here you would implement actual database backup
+    # For now, we'll create a simple JSON export
+    
+    import json
+    from io import BytesIO
+    
+    # Export users
+    users = db_session.query(User).all()
+    users_data = []
+    for user in users:
+        users_data.append({
+            'user_id': user.user_id,
+            'username': user.username,
+            'name': user.name,
+            'email': user.email,
+            'phone': user.phone,
+            'created_at': user.created_at.isoformat() if user.created_at else None
+        })
+    
+    # Export tickets
+    tickets = db_session.query(Ticket).all()
+    tickets_data = []
+    for ticket in tickets:
+        tickets_data.append({
+            'ticket_number': ticket.ticket_number,
+            'user_id': ticket.user_id,
+            'category': ticket.category,
+            'question': ticket.question,
+            'status': ticket.status.value if hasattr(ticket.status, 'value') else str(ticket.status),
+            'created_at': ticket.created_at.isoformat() if ticket.created_at else None
+        })
+    
+    backup_data = {
+        'users': users_data,
+        'tickets': tickets_data,
+        'backup_date': datetime.utcnow().isoformat()
+    }
+    
+    # Create file
+    backup_file = BytesIO()
+    backup_file.write(json.dumps(backup_data, indent=2).encode())
+    backup_file.seek(0)
+    
+    await update.message.reply_document(
+        document=backup_file,
+        filename=f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+        caption="✅ Database backup completed"
+    )
+
+@super_admin_only
+@private_chat_only
+async def manage_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manage ticket categories"""
+    subcommand = context.args[0] if context.args else None
+    
+    if not subcommand:
+        text = "**Category Management:**\n\n"
+        text += "Current categories:\n"
+        for key, value in Config.CATEGORIES.items():
+            text += f"• {key}: {value}\n"
+        text += "\nCommands:\n"
+        text += "/addcategory <key> <name> - Add new category\n"
+        text += "/removecategory <key> - Remove category"
         
-        message = update.message.text
-        users = db.get_all_users()
-        
-        await update.message.reply_text(
-            f"📢 Broadcasting to {len(users)} users...\n\n"
-            f"This may take a while."
-        )
-        
-        success = 0
-        failed = 0
-        
-        for user in users:
-            try:
-                await context.bot.send_message(
-                    chat_id=user.user_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
-                success += 1
-            except:
-                failed += 1
-            
-            # Small delay to avoid flood limits
-            import asyncio
-            await asyncio.sleep(0.05)
-        
-        await update.message.reply_text(
-            f"✅ Broadcast completed!\n"
-            f"✓ Sent: {success}\n"
-            f"✗ Failed: {failed}"
-        )
-        
-        # Log action
-        db.log_action(
-            update.effective_user.id,
-            'broadcast',
-            {'total': len(users), 'success': success, 'failed': failed}
-        )
-        
-        return ConversationHandler.END
+        await update.message.reply_text(text, parse_mode='Markdown')
+        return
+    
+    # This would require modifying Config.CATEGORIES dynamically
+    # For now, we'll show how to implement it
+    await update.message.reply_text("Category management will be implemented in the next version.")
