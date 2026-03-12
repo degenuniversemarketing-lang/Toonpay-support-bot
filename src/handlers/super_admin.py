@@ -5,6 +5,10 @@ from src.models import AllowedGroup, User, Ticket
 from src.utils.decorators import super_admin_only, private_chat_only
 from src.config import Config
 import logging
+import asyncio  # FIXED: Added missing import
+from datetime import datetime, timedelta
+import json
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +24,10 @@ async def super_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/listgroups - List all allowed groups\n\n"
         "**Bot Management:**\n"
         "/broadcast <message> - Send message to all users\n"
-        "/stats - Detailed statistics\n"
-        "/settings - Bot settings\n"
-        "/backup - Backup database\n"
-        "/restore - Restore from backup\n\n"
+        "/superstats - Detailed statistics\n"
+        "/backup - Backup database\n\n"
         "**Category Management:**\n"
-        "/addcategory <key> <name> - Add new category\n"
-        "/removecategory <key> - Remove category\n"
-        "/listcategories - List all categories"
+        "/categories - List all categories"
     )
     
     await update.message.reply_text(text, parse_mode='Markdown')
@@ -216,12 +216,6 @@ async def backup_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Create database backup"""
     await update.message.reply_text("🔄 Creating backup...")
     
-    # Here you would implement actual database backup
-    # For now, we'll create a simple JSON export
-    
-    import json
-    from io import BytesIO
-    
     # Export users
     users = db_session.query(User).all()
     users_data = []
@@ -269,20 +263,23 @@ async def backup_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @private_chat_only
 async def manage_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manage ticket categories"""
-    subcommand = context.args[0] if context.args else None
-    
-    if not subcommand:
+    if not context.args:
         text = "**Category Management:**\n\n"
         text += "Current categories:\n"
         for key, value in Config.CATEGORIES.items():
             text += f"• {key}: {value}\n"
         text += "\nCommands:\n"
-        text += "/addcategory <key> <name> - Add new category\n"
-        text += "/removecategory <key> - Remove category"
+        text += "/categories list - List all categories"
         
         await update.message.reply_text(text, parse_mode='Markdown')
         return
     
-    # This would require modifying Config.CATEGORIES dynamically
-    # For now, we'll show how to implement it
-    await update.message.reply_text("Category management will be implemented in the next version.")
+    command = context.args[0].lower()
+    
+    if command == "list":
+        text = "**Current Categories:**\n\n"
+        for key, value in Config.CATEGORIES.items():
+            text += f"• {key}: {value}\n"
+        await update.message.reply_text(text, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("Unknown command. Use /categories to see options.")
