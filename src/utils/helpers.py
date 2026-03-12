@@ -1,78 +1,84 @@
-import random
-import string
 import pandas as pd
+from io import BytesIO
 from datetime import datetime
-import io
+from typing import List, Dict
+import csv
+import aiofiles
 
-def generate_ticket_id():
-    """Generate unique ticket ID"""
+def generate_ticket_number():
+    """Generate unique ticket number"""
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    random_chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    return f"TKT-{timestamp}-{random_chars}"
+    return f"TKT-{timestamp}"
 
-def format_ticket_for_admin(ticket: dict):
-    """Format ticket message for admin group"""
+def format_user_info(user, tickets=None):
+    """Format user information for display"""
+    text = f"👤 **User Details**\n"
+    text += f"Name: {user.name or 'Not provided'}\n"
+    text += f"Username: @{user.username if user.username else 'N/A'}\n"
+    text += f"User ID: `{user.user_id}`\n"
+    text += f"Email: {user.email or 'Not provided'}\n"
+    text += f"Phone: {user.phone or 'Not provided'}\n"
+    text += f"Joined: {user.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+    
+    if tickets:
+        text += f"\n📊 **Ticket Statistics**\n"
+        text += f"Total Tickets: {len(tickets)}\n"
+        open_tickets = sum(1 for t in tickets if t.status.value == 'open')
+        in_progress = sum(1 for t in tickets if t.status.value == 'in_progress')
+        closed = sum(1 for t in tickets if t.status.value == 'closed')
+        text += f"Open: {open_tickets} | In Progress: {in_progress} | Closed: {closed}\n"
+    
+    return text
+
+def format_ticket_info(ticket, include_replies=True):
+    """Format ticket information for display"""
     status_emoji = {
         'open': '🟢',
         'in_progress': '🟡',
-        'closed': '🔴'
+        'closed': '🔴',
+        'pending': '⏳'
     }
     
-    message = f"""
-<b>🎫 New Ticket: {ticket['ticket_id']}</b>
-{status_emoji.get(ticket['status'], '🟢')} Status: {ticket['status'].title()}
-
-<b>👤 User Details:</b>
-• Name: {ticket['name']}
-• Email: {ticket['email']}
-• Phone: {ticket['phone']}
-• User ID: <code>{ticket['user_id']}</code>
-
-<b>📋 Ticket Details:</b>
-• Category: {ticket['category']}
-• Created: {ticket['created_at'].strftime('%Y-%m-%d %H:%M:%S')}
-
-<b>📝 Issue Description:</b>
-{ticket['description']}
-
-<b>⏱️ ToonPay Support Available 24/7</b>
-"""
-    return message
-
-def format_detailed_export(users_data, tickets_data):
-    """Format data for detailed export"""
-    # Create DataFrames
-    users_df = pd.DataFrame(users_data)
-    tickets_df = pd.DataFrame(tickets_data)
+    text = f"🎫 **Ticket #{ticket.ticket_number}**\n"
+    text += f"Status: {status_emoji.get(ticket.status.value, '⚪')} {ticket.status.value.upper()}\n"
+    text += f"Category: {ticket.category}\n"
+    text += f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+    text += f"Question: {ticket.question}\n"
     
-    # Create Excel file in memory
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        users_df.to_excel(writer, sheet_name='Users', index=False)
-        tickets_df.to_excel(writer, sheet_name='Tickets', index=False)
-        
-        # Create summary sheet
-        summary_data = {
-            'Metric': ['Total Users', 'Total Tickets', 'Open', 'In Progress', 'Replied & Closed', 'Closed No Reply'],
-            'Value': [
-                len(users_df),
-                len(tickets_df),
-                len(tickets_df[tickets_df['Status'] == 'open']),
-                len(tickets_df[tickets_df['Status'] == 'in_progress']),
-                len(tickets_df[(tickets_df['Status'] == 'closed') & (tickets_df['Admin Answer'].notna())]),
-                len(tickets_df[(tickets_df['Status'] == 'closed') & (tickets_df['Admin Answer'].isna())])
-            ]
-        }
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+    if include_replies and ticket.replies:
+        text += f"\n📝 **Replies:**\n"
+        for reply in ticket.replies:
+            text += f"Admin @{reply.admin_username}: {reply.message}\n"
+            text += f"Time: {reply.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+    
+    return text
+
+async def generate_csv_report(tickets_data: List[Dict]) -> BytesIO:
+    """Generate CSV report from tickets data"""
+    output = BytesIO()
+    
+    fieldnames = [
+        'Ticket Number', 'User Name', 'Username', 'User ID', 
+        'Email', 'Phone', 'Category', 'Question', 'Status',
+        'Admin Answer', 'Admin Username', 'Created At', 'Closed At'
+    ]
+    
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    
+    for data in tickets_data:
+        writer.writerow(data)
     
     output.seek(0)
     return output
 
-def generate_ticket_link(chat_id, message_id):
-    """Generate Telegram message link for ticket"""
-    if message_id and chat_id:
-        # Remove -100 from group ID for link
-        clean_chat_id = str(chat_id).replace('-100', '')
-        return f"https://t.me/c/{clean_chat_id}/{message_id}"
-    return None
+async def generate_excel_report(tickets_data: List[Dict]) -> BytesIO:
+    """Generate Excel report from tickets data"""
+    df = pd.DataFrame(tickets_data)
+    output = BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name='Tickets', index=False)
+    
+    output.seek(0)
+    return output
