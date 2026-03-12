@@ -26,6 +26,7 @@ from src.handlers import (
 from src.models import AllowedGroup
 
 # Set up logging
+logging.basicFormat = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -50,14 +51,14 @@ class ToonPaySupportBot:
         """Setup all bot handlers"""
         
         # User handlers (private chat only)
-        self.application.add_handler(CommandHandler("start", user.start, filters=filters.CHAT_TYPE.PRIVATE))
+        self.application.add_handler(CommandHandler("start", user.start, filters=filters.ChatType.PRIVATE))
         self.application.add_handler(user.ticket_conv_handler)
         self.application.add_handler(user.reply_conv_handler)
         self.application.add_handler(CallbackQueryHandler(user.handle_callback, pattern="^(?!admin_).*"))
         
         # Group handlers
         self.application.add_handler(CommandHandler("support", group.support_command))
-        self.application.add_handler(MessageHandler(filters.CHAT_TYPE.GROUPS, group.handle_group_message))
+        self.application.add_handler(MessageHandler(filters.ChatType.GROUPS, group.handle_group_message))
         
         # Admin handlers (admin group only)
         self.application.add_handler(CommandHandler("stats", admin.admin_stats, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
@@ -76,14 +77,14 @@ class ToonPaySupportBot:
         ))
         
         # Super admin handlers (private chat only)
-        self.application.add_handler(CommandHandler("super", super_admin.super_admin_panel, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("addgroup", super_admin.add_group, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("removegroup", super_admin.remove_group, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("listgroups", super_admin.list_groups, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("broadcast", super_admin.broadcast, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("superstats", super_admin.super_stats, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("backup", super_admin.backup_database, filters=filters.CHAT_TYPE.PRIVATE))
-        self.application.add_handler(CommandHandler("categories", super_admin.manage_categories, filters=filters.CHAT_TYPE.PRIVATE))
+        self.application.add_handler(CommandHandler("super", super_admin.super_admin_panel, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("addgroup", super_admin.add_group, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("removegroup", super_admin.remove_group, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("listgroups", super_admin.list_groups, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("broadcast", super_admin.broadcast, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("superstats", super_admin.super_stats, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("backup", super_admin.backup_database, filters=filters.ChatType.PRIVATE))
+        self.application.add_handler(CommandHandler("categories", super_admin.manage_categories, filters=filters.ChatType.PRIVATE))
         
         # Error handler
         self.application.add_error_handler(self._error_handler)
