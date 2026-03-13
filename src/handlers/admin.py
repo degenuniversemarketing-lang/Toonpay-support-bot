@@ -137,7 +137,7 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             keyboard = [[
                 InlineKeyboardButton(
-                    f"📝 Reply", 
+                    f"📝 Reply to #{ticket.ticket_number}", 
                     callback_data=f"reply_{ticket.ticket_number}"
                 ),
                 InlineKeyboardButton(
@@ -160,7 +160,7 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error showing pending tickets: {str(e)}")
 
 async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Search tickets"""
+    """Search tickets - FIXED VERSION"""
     try:
         if not context.args:
             text = (
@@ -170,7 +170,7 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• /search TKT-20240313 - Search by ticket number\n"
                 "• /search @username - Search by username\n"
                 "• /search 123456789 - Search by user ID\n"
-                "• /search john - Search by name"
+                "• /search john - Search by name or email"
             )
             await update.message.reply_text(text, parse_mode='HTML')
             return
@@ -178,9 +178,9 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         search_term = ' '.join(context.args).strip()
         await update.message.reply_text(f"🔍 Searching for: {safe_text(search_term)}...")
         
-        results = []
+        results_found = False
         
-        # Search by ticket number
+        # Search by ticket number (exact match)
         ticket = db_session.query(Ticket).filter_by(ticket_number=search_term).first()
         if ticket:
             user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
@@ -203,38 +203,88 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]]
             
             await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-            return
+            results_found = True
         
         # Search by username
         clean_username = search_term.replace('@', '')
-        users = db_session.query(User).filter(
+        users_by_username = db_session.query(User).filter(
             User.username.ilike(f"%{clean_username}%")
         ).all()
         
-        for user in users:
-            results.append(f"👤 @{safe_text(user.username)} - ID: <code>{user.user_id}</code>")
+        for user in users_by_username:
+            results_found = True
+            text = (
+                f"👤 <b>User Found by Username</b>\n\n"
+                f"<b>Name:</b> {safe_text(user.name)}\n"
+                f"<b>Username:</b> @{safe_text(user.username)}\n"
+                f"<b>User ID:</b> <code>{user.user_id}</code>\n"
+                f"<b>Email:</b> {safe_text(user.email)}\n"
+                f"<b>Phone:</b> {safe_text(user.phone)}"
+            )
+            
+            # Get user's tickets
+            user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).count()
+            text += f"\n<b>Tickets:</b> {user_tickets}"
+            
+            keyboard = [[
+                InlineKeyboardButton("👤 View Details", callback_data=f"viewuser_{user.user_id}")
+            ]]
+            
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         
         # Search by user ID
         if search_term.isdigit():
             user = db_session.query(User).filter_by(user_id=int(search_term)).first()
-            if user:
-                results.append(f"👤 @{safe_text(user.username)} - ID: <code>{user.user_id}</code>")
+            if user and user not in users_by_username:
+                results_found = True
+                text = (
+                    f"👤 <b>User Found by ID</b>\n\n"
+                    f"<b>Name:</b> {safe_text(user.name)}\n"
+                    f"<b>Username:</b> @{safe_text(user.username)}\n"
+                    f"<b>User ID:</b> <code>{user.user_id}</code>\n"
+                    f"<b>Email:</b> {safe_text(user.email)}\n"
+                    f"<b>Phone:</b> {safe_text(user.phone)}"
+                )
+                
+                # Get user's tickets
+                user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).count()
+                text += f"\n<b>Tickets:</b> {user_tickets}"
+                
+                keyboard = [[
+                    InlineKeyboardButton("👤 View Details", callback_data=f"viewuser_{user.user_id}")
+                ]]
+                
+                await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         
-        # Search by name
-        name_users = db_session.query(User).filter(
-            User.name.ilike(f"%{search_term}%")
+        # Search by name or email
+        users_by_name = db_session.query(User).filter(
+            (User.name.ilike(f"%{search_term}%")) | 
+            (User.email.ilike(f"%{search_term}%"))
         ).all()
         
-        for user in name_users:
-            if user not in users:
-                results.append(f"👤 {safe_text(user.name)} (@{safe_text(user.username)}) - ID: <code>{user.user_id}</code>")
+        for user in users_by_name:
+            if user not in users_by_username and (not search_term.isdigit() or user.user_id != int(search_term)):
+                results_found = True
+                text = (
+                    f"👤 <b>User Found by Name/Email</b>\n\n"
+                    f"<b>Name:</b> {safe_text(user.name)}\n"
+                    f"<b>Username:</b> @{safe_text(user.username)}\n"
+                    f"<b>User ID:</b> <code>{user.user_id}</code>\n"
+                    f"<b>Email:</b> {safe_text(user.email)}\n"
+                    f"<b>Phone:</b> {safe_text(user.phone)}"
+                )
+                
+                # Get user's tickets
+                user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).count()
+                text += f"\n<b>Tickets:</b> {user_tickets}"
+                
+                keyboard = [[
+                    InlineKeyboardButton("👤 View Details", callback_data=f"viewuser_{user.user_id}")
+                ]]
+                
+                await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         
-        if results:
-            text = "🔍 <b>Search Results:</b>\n\n" + "\n".join(results[:10])
-            if len(results) > 10:
-                text += f"\n\n... and {len(results) - 10} more"
-            await update.message.reply_text(text, parse_mode='HTML')
-        else:
+        if not results_found:
             await update.message.reply_text("❌ No results found.")
             
     except Exception as e:
@@ -286,11 +336,12 @@ async def quick_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             await update.message.reply_text(f"✅ Reply sent. Ticket #{ticket_number} closed.")
-        except:
+        except Exception as e:
+            logger.error(f"Failed to send reply to user: {e}")
             await update.message.reply_text(f"✅ Reply saved but user cannot be notified.")
             
     except Exception as e:
-        logger.error(f"Error in quick_reply: {e}")
+        logger.error(f"Error in quick_reply: {e}\n{traceback.format_exc()}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -451,7 +502,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(f"❌ Error: {str(e)}")
 
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle admin text replies to tickets"""
+    """Handle admin text replies to tickets - FIXED VERSION"""
     try:
         if not is_admin_group(update.effective_chat.id):
             return
