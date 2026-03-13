@@ -87,7 +87,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show pending tickets - YOUR WORKING VERSION"""
+    """Show pending tickets"""
     try:
         tickets = db_session.query(Ticket).filter(
             Ticket.status.in_(['open', 'in_progress'])
@@ -131,67 +131,36 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Search tickets - FIXED VERSION"""
+    """Search tickets"""
     if not context.args:
-        help_text = (
-            "🔍 **Search Help**\n\n"
-            "Usage: /search <search term>\n\n"
-            "Examples:\n"
-            "/search john (search by name)\n"
-            "/search @username (search by username)\n"
-            "/search TKT-20240313 (search by ticket number)\n"
-            "/search 123456789 (search by user ID)"
-        )
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+        await update.message.reply_text("Usage: /search <ticket_number or username>")
         return
     
-    search_term = ' '.join(context.args).strip()
-    logger.info(f"Searching for: {search_term}")
+    search_term = ' '.join(context.args)
     
-    try:
-        # Search by ticket number
-        ticket = db_session.query(Ticket).filter_by(ticket_number=search_term).first()
-        if ticket:
-            user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
-            text = (
-                f"🎫 **Ticket Found**\n\n"
-                f"**Ticket #:** {ticket.ticket_number}\n"
-                f"**User:** {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-                f"**User ID:** `{user.user_id}`\n"
-                f"**Category:** {ticket.category}\n"
-                f"**Status:** {ticket.status}\n"
-                f"**Created:** {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                f"**Question:** {ticket.question}"
-            )
-            await update.message.reply_text(text, parse_mode='Markdown')
-            return
-        
-        # Search by username
-        clean_username = search_term.replace('@', '')
-        user = db_session.query(User).filter(
-            User.username.ilike(f"%{clean_username}%")
-        ).first()
-        
-        if user:
-            user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).all()
-            text = format_user_info(user, user_tickets)
-            await update.message.reply_text(text, parse_mode='Markdown')
-            return
-        
-        # Search by user ID
-        if search_term.isdigit():
-            user = db_session.query(User).filter_by(user_id=int(search_term)).first()
-            if user:
-                user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).all()
-                text = format_user_info(user, user_tickets)
-                await update.message.reply_text(text, parse_mode='Markdown')
-                return
-        
-        await update.message.reply_text("No results found.")
-        
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        await update.message.reply_text(f"Error searching: {str(e)}")
+    # Search by ticket number
+    ticket = db_session.query(Ticket).filter_by(ticket_number=search_term).first()
+    if ticket:
+        user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+        text = (
+            f"🎫 **Ticket #{ticket.ticket_number}**\n"
+            f"User: {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
+            f"Category: {ticket.category}\n"
+            f"Status: {ticket.status}\n"
+            f"Question: {ticket.question}\n"
+        )
+        await update.message.reply_text(text, parse_mode='Markdown')
+        return
+    
+    # Search by username
+    user = db_session.query(User).filter_by(username=search_term.replace('@', '')).first()
+    if user:
+        user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).all()
+        text = format_user_info(user, user_tickets)
+        await update.message.reply_text(text, parse_mode='Markdown')
+        return
+    
+    await update.message.reply_text("No results found.")
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Export all data"""
@@ -203,11 +172,9 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         for ticket in tickets:
             user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
-            last_reply = ticket.replies[-1] if ticket.replies else None
-            
             data.append({
                 'Ticket #': ticket.ticket_number,
-                'User Name': user.name if user else 'N/A',
+                'User': user.name if user else 'N/A',
                 'Username': user.username if user else 'N/A',
                 'User ID': ticket.user_id,
                 'Email': user.email if user else 'N/A',
@@ -215,9 +182,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'Category': ticket.category,
                 'Question': ticket.question,
                 'Status': ticket.status,
-                'Admin Reply': last_reply.message if last_reply else '',
-                'Created': ticket.created_at.strftime('%Y-%m-%d %H:%M'),
-                'Updated': ticket.updated_at.strftime('%Y-%m-%d %H:%M')
+                'Created': ticket.created_at.strftime('%Y-%m-%d %H:%M')
             })
         
         df = pd.DataFrame(data)
@@ -227,8 +192,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_document(
             document=output,
-            filename=f"tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            caption="✅ Tickets export completed"
+            filename=f"tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         )
     except Exception as e:
         logger.error(f"Error in export_data: {e}")
@@ -245,81 +209,37 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     logger.info(f"Admin callback: {data}")
     
-    try:
-        if data == "admin_stats":
-            await show_stats(update, context)
-            await query.message.delete()
-        
-        elif data == "admin_pending":
-            await show_pending(update, context)
-            await query.message.delete()
-        
-        elif data == "admin_search":
-            await query.edit_message_text(
-                "🔍 **Search Help**\n\n"
-                "Use /search command with your search term.\n\n"
-                "Examples:\n"
-                "/search TKT-20240313\n"
-                "/search @username\n"
-                "/search 123456789",
-                parse_mode='Markdown'
-            )
-        
-        elif data == "admin_download":
-            await export_data(update, context)
-            await query.message.delete()
-        
-        elif data.startswith("reply_"):
-            ticket_number = data.replace("reply_", "")
-            context.user_data['replying_to'] = ticket_number
-            await query.edit_message_text(
-                f"Please type your reply for ticket #{ticket_number}:"
-            )
-        
-        elif data.startswith("progress_"):
-            ticket_number = data.replace("progress_", "")
-            ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
-            if ticket:
-                ticket.status = 'in_progress'
-                db_session.commit()
-                await query.edit_message_text(
-                    f"✅ Ticket #{ticket_number} marked as in progress by @{update.effective_user.username}"
-                )
-                
-                # Notify user
-                try:
-                    await context.bot.send_message(
-                        chat_id=ticket.user_id,
-                        text=f"🟡 Your ticket #{ticket_number} is now being reviewed by our support team."
-                    )
-                except:
-                    pass
-        
-        elif data.startswith("view_"):
-            ticket_number = data.replace("view_", "")
-            ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
-            if ticket:
-                user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
-                text = (
-                    f"👤 **User Details**\n"
-                    f"Name: {user.name or 'N/A'}\n"
-                    f"Username: @{user.username or 'N/A'}\n"
-                    f"User ID: `{user.user_id}`\n"
-                    f"Email: {user.email or 'N/A'}\n"
-                    f"Phone: {user.phone or 'N/A'}\n\n"
-                    f"🎫 **Ticket #{ticket.ticket_number}**\n"
-                    f"Category: {ticket.category}\n"
-                    f"Status: {ticket.status}\n"
-                    f"Question: {ticket.question}"
-                )
-                await query.edit_message_text(text, parse_mode='Markdown')
-        
-        elif data.startswith("cancel_"):
-            await query.delete_message()
+    if data == "admin_stats":
+        await show_stats(update, context)
+        await query.message.delete()
     
-    except Exception as e:
-        logger.error(f"Error in admin_callback_handler: {e}")
-        await query.edit_message_text(f"Error: {str(e)}")
+    elif data == "admin_pending":
+        await show_pending(update, context)
+        await query.message.delete()
+    
+    elif data == "admin_search":
+        await query.edit_message_text("Use /search command with your search term.")
+    
+    elif data == "admin_download":
+        await export_data(update, context)
+        await query.message.delete()
+    
+    elif data.startswith("reply_"):
+        ticket_number = data.replace("reply_", "")
+        context.user_data['replying_to'] = ticket_number
+        await query.edit_message_text(
+            f"Please type your reply for ticket #{ticket_number}:"
+        )
+    
+    elif data.startswith("progress_"):
+        ticket_number = data.replace("progress_", "")
+        ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+        if ticket:
+            ticket.status = 'in_progress'
+            db_session.commit()
+            await query.edit_message_text(
+                f"✅ Ticket #{ticket_number} marked as in progress by @{update.effective_user.username}"
+            )
 
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle admin replies to tickets"""
@@ -331,93 +251,33 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     reply_text = update.message.text
-    logger.info(f"Admin reply to ticket {ticket_number}: {reply_text[:50]}...")
+    ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
     
+    if not ticket:
+        await update.message.reply_text("Ticket not found.")
+        return
+    
+    # Save reply
+    reply = TicketReply(
+        ticket_id=ticket.id,
+        admin_id=update.effective_user.id,
+        admin_username=update.effective_user.username or "Admin",
+        message=reply_text
+    )
+    
+    db_session.add(reply)
+    ticket.status = 'closed'
+    db_session.commit()
+    
+    # Send to user
     try:
-        ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
-        
-        if not ticket:
-            await update.message.reply_text("Ticket not found.")
-            return
-        
-        # Save reply
-        reply = TicketReply(
-            ticket_id=ticket.id,
-            admin_id=update.effective_user.id,
-            admin_username=update.effective_user.username or "Admin",
-            message=reply_text
-        )
-        
-        db_session.add(reply)
-        ticket.status = 'closed'
-        ticket.updated_at = datetime.utcnow()
-        db_session.commit()
-        
-        # Send to user
-        try:
-            user_text = (
-                f"📨 **Reply to your ticket #{ticket_number}**\n\n"
-                f"Support Team: {reply_text}\n\n"
-                f"This ticket is now closed. If you have more questions, please create a new ticket."
-            )
-            await context.bot.send_message(
-                chat_id=ticket.user_id,
-                text=user_text,
-                parse_mode='Markdown'
-            )
-            
-            await update.message.reply_text(f"✅ Reply sent to user. Ticket #{ticket_number} closed.")
-        except Exception as e:
-            logger.error(f"Failed to send reply to user: {e}")
-            await update.message.reply_text(f"✅ Reply saved but couldn't notify user.")
-        
-        context.user_data.pop('replying_to', None)
-        
-    except Exception as e:
-        logger.error(f"Error in admin_reply_handler: {e}")
-        await update.message.reply_text(f"Error sending reply: {str(e)}")
-
-# Function to send new ticket to admin group - WITH WORKING REPLY BUTTON
-async def send_ticket_to_admin_group(context, ticket, user, question):
-    """Send new ticket notification to admin group"""
-    try:
-        admin_text = (
-            f"🆕 **New Support Ticket**\n\n"
-            f"Ticket: #{ticket.ticket_number}\n"
-            f"User: {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-            f"User ID: `{user.user_id}`\n"
-            f"Category: {ticket.category}\n"
-            f"Email: {user.email or 'N/A'}\n"
-            f"Phone: {user.phone or 'N/A'}\n\n"
-            f"**Question:**\n{question}\n\n"
-            f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
-        )
-        
-        # Using the SAME reply button format that works in /pending
-        keyboard = [[
-            InlineKeyboardButton(
-                f"📝 Reply to #{ticket.ticket_number}", 
-                callback_data=f"reply_{ticket.ticket_number}"
-            ),
-            InlineKeyboardButton(
-                "🟡 In Progress", 
-                callback_data=f"progress_{ticket.ticket_number}"
-            ),
-            InlineKeyboardButton(
-                "👤 View User", 
-                callback_data=f"view_{ticket.ticket_number}"
-            ),
-            InlineKeyboardButton(
-                "❌ Cancel", 
-                callback_data=f"cancel_{ticket.ticket_number}"
-            )
-        ]]
-        
         await context.bot.send_message(
-            chat_id=Config.ADMIN_GROUP_ID,
-            text=admin_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            chat_id=ticket.user_id,
+            text=f"📨 **Reply to #{ticket_number}**\n\nSupport: {reply_text}\n\nTicket closed.",
             parse_mode='Markdown'
         )
-    except Exception as e:
-        logger.error(f"Failed to send to admin group: {e}")
+        await update.message.reply_text(f"✅ Reply sent. Ticket #{ticket_number} closed.")
+    except:
+        await update.message.reply_text(f"✅ Reply saved but couldn't notify user.")
+    
+    context.user_data.pop('replying_to', None)
