@@ -77,22 +77,6 @@ class ToonPaySupportBot:
             )
         )
         
-        # Admin callback handler for buttons
-        self.application.add_handler(
-            CallbackQueryHandler(
-                admin.admin_callback_handler,
-                pattern="^(admin_|reply_|progress_)"
-            )
-        )
-        
-        # Admin reply handler for text messages (replies to tickets)
-        self.application.add_handler(
-            MessageHandler(
-                filters.Chat(Config.ADMIN_GROUP_ID) & filters.TEXT & ~filters.COMMAND,
-                admin.admin_reply_handler
-            )
-        )
-        
         # ==================== SUPER ADMIN HANDLERS (Private Chat Only) ====================
         self.application.add_handler(
             CommandHandler("super", super_admin.super_admin_panel, filters=filters.ChatType.PRIVATE)
@@ -127,6 +111,15 @@ class ToonPaySupportBot:
     async def _error_handler(self, update, context):
         """Log errors"""
         logger.error(f"Update {update} caused error {context.error}")
+        
+        # Don't try to reply if update doesn't have message
+        if update and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    f"⚠️ An error occurred. The admin has been notified."
+                )
+            except:
+                pass
         
         # Notify super admins
         for admin_id in Config.SUPER_ADMIN_IDS:
