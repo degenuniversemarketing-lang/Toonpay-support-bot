@@ -12,7 +12,6 @@ from src.models import User, Ticket, TicketReply
 from src.utils.helpers import generate_ticket_number, format_user_info, format_ticket_info
 from src.keyboards.user_keyboards import get_start_keyboard, get_category_keyboard, get_ticket_action_keyboard
 from src.utils.decorators import private_chat_only
-from src.handlers.admin import send_ticket_to_admin_group  # IMPORT THE FUNCTION
 import logging
 
 # States
@@ -80,7 +79,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         
         for ticket in tickets:
-            # Using string values instead of TicketStatus enum
+            # FIXED: Using string values instead of TicketStatus enum
             status_emoji = {
                 'open': '🟢',
                 'in_progress': '🟡',
@@ -196,7 +195,7 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user.phone = context.user_data.get('ticket_phone', db_user.phone)
         db_user.last_active = update.message.date
     
-    # Create ticket - using string 'open' instead of TicketStatus.OPEN
+    # Create ticket - FIXED: using string 'open' instead of TicketStatus.OPEN
     ticket = Ticket(
         ticket_number=generate_ticket_number(),
         user_id=user.id,
@@ -219,35 +218,29 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_start_keyboard()
     )
     
-    # Forward to admin group using the WORKING function from admin.py
+    # Forward to admin group
     try:
-        await send_ticket_to_admin_group(context, ticket, db_user, question)
-        logger.info(f"Ticket {ticket.ticket_number} sent to admin group")
+        admin_text = (
+            f"🆕 **New Support Ticket**\n\n"
+            f"Ticket: #{ticket.ticket_number}\n"
+            f"User: {db_user.name or 'N/A'} (@{user.username or 'N/A'})\n"
+            f"User ID: `{user.id}`\n"
+            f"Category: {ticket.category}\n"
+            f"Email: {db_user.email or 'N/A'}\n"
+            f"Phone: {db_user.phone or 'N/A'}\n\n"
+            f"**Question:**\n{question}\n\n"
+            f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+        
+        from src.keyboards.admin_keyboards import get_ticket_admin_keyboard
+        await context.bot.send_message(
+            chat_id=context.bot_data.get('admin_group_id'),
+            text=admin_text,
+            reply_markup=get_ticket_admin_keyboard(ticket.ticket_number, user.id),
+            parse_mode='Markdown'
+        )
     except Exception as e:
         logger.error(f"Failed to forward to admin group: {e}")
-        # Fallback to old method if needed
-        try:
-            admin_text = (
-                f"🆕 **New Support Ticket**\n\n"
-                f"Ticket: #{ticket.ticket_number}\n"
-                f"User: {db_user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-                f"User ID: `{user.id}`\n"
-                f"Category: {ticket.category}\n"
-                f"Email: {db_user.email or 'N/A'}\n"
-                f"Phone: {db_user.phone or 'N/A'}\n\n"
-                f"**Question:**\n{question}\n\n"
-                f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
-            )
-            
-            from src.keyboards.admin_keyboards import get_ticket_admin_keyboard
-            await context.bot.send_message(
-                chat_id=context.bot_data.get('admin_group_id'),
-                text=admin_text,
-                reply_markup=get_ticket_admin_keyboard(ticket.ticket_number, user.id),
-                parse_mode='Markdown'
-            )
-        except Exception as e2:
-            logger.error(f"Fallback also failed: {e2}")
     
     # Clear user data
     for key in ['ticket_category', 'ticket_name', 'ticket_email', 'ticket_phone']:
@@ -280,7 +273,7 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     db_session.add(reply)
-    # using string 'open' instead of TicketStatus.OPEN
+    # FIXED: using string 'open' instead of TicketStatus.OPEN
     ticket.status = 'open'  # Changed from TicketStatus.OPEN
     db_session.commit()
     
