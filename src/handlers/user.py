@@ -8,7 +8,7 @@ from telegram.ext import (
     filters
 )
 from src.database import db_session
-from src.models import User, Ticket, TicketReply, TicketStatus
+from src.models import User, Ticket, TicketReply
 from src.utils.helpers import generate_ticket_number, format_user_info, format_ticket_info
 from src.keyboards.user_keyboards import get_start_keyboard, get_category_keyboard, get_ticket_action_keyboard
 from src.utils.decorators import private_chat_only
@@ -79,16 +79,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = []
         
         for ticket in tickets:
+            # FIXED: Using string values instead of TicketStatus enum
             status_emoji = {
-                TicketStatus.OPEN: '🟢',
-                TicketStatus.IN_PROGRESS: '🟡',
-                TicketStatus.CLOSED: '🔴',
-                TicketStatus.PENDING: '⏳'
+                'open': '🟢',
+                'in_progress': '🟡',
+                'closed': '🔴',
+                'pending': '⏳'
             }.get(ticket.status, '⚪')
             
             text += f"{status_emoji} Ticket #{ticket.ticket_number}\n"
             text += f"Category: {ticket.category}\n"
-            text += f"Status: {ticket.status.value}\n"
+            text += f"Status: {ticket.status}\n"
             text += f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
             
             keyboard.append([InlineKeyboardButton(
@@ -146,7 +147,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Each ticket is for one issue only\n"
             "• Tickets close after admin reply\n"
             "• Response time: Within 24 hours 🚀\n\n"
-            "For urgent issues, please contact https://t.me/toonpaysupport"
+            "For urgent issues, please contact support@toonpay.com"
         )
         await query.edit_message_text(help_text, reply_markup=get_start_keyboard(), parse_mode='Markdown')
 
@@ -194,13 +195,13 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user.phone = context.user_data.get('ticket_phone', db_user.phone)
         db_user.last_active = update.message.date
     
-    # Create ticket
+    # Create ticket - FIXED: using string 'open' instead of TicketStatus.OPEN
     ticket = Ticket(
         ticket_number=generate_ticket_number(),
         user_id=user.id,
         category=context.user_data.get('ticket_category', 'other'),
         question=question,
-        status=TicketStatus.OPEN
+        status='open'  # Changed from TicketStatus.OPEN
     )
     
     db_session.add(ticket)
@@ -272,7 +273,8 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     db_session.add(reply)
-    ticket.status = TicketStatus.OPEN
+    # FIXED: using string 'open' instead of TicketStatus.OPEN
+    ticket.status = 'open'  # Changed from TicketStatus.OPEN
     db_session.commit()
     
     await update.message.reply_text(
@@ -299,7 +301,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Operation cancelled.", reply_markup=get_start_keyboard())
     return ConversationHandler.END
 
-# Conversation handler for ticket creation - FIXED with per_message=False
+# Conversation handler for ticket creation
 ticket_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(handle_callback, pattern="^new_ticket$")],
     states={
@@ -312,10 +314,11 @@ ticket_conv_handler = ConversationHandler(
     fallbacks=[CommandHandler('cancel', cancel)],
     name="ticket_creation",
     persistent=True,
-    per_message=False
+    per_message=False,
+    per_chat=True
 )
 
-# Conversation handler for replies - FIXED with per_message=False
+# Conversation handler for replies
 reply_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(handle_callback, pattern="^reply_")],
     states={
@@ -324,5 +327,6 @@ reply_conv_handler = ConversationHandler(
     fallbacks=[CommandHandler('cancel', cancel)],
     name="user_reply",
     persistent=True,
-    per_message=False
+    per_message=False,
+    per_chat=True
 )
