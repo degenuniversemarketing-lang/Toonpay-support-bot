@@ -27,7 +27,7 @@ from src.handlers import (
 # Set up logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG  # Changed to DEBUG for more details
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -52,66 +52,74 @@ class ToonPaySupportBot:
         logger.info(f"ADMIN_GROUP_ID from config: {Config.ADMIN_GROUP_ID}")
         logger.info(f"Type of ADMIN_GROUP_ID: {type(Config.ADMIN_GROUP_ID)}")
         
-        # User handlers (private chat only)
-        self.application.add_handler(CommandHandler("start", user.start, filters=filters.ChatType.PRIVATE))
+        # ==================== USER HANDLERS (Private Chat Only) ====================
+        self.application.add_handler(
+            CommandHandler("start", user.start, filters=filters.ChatType.PRIVATE)
+        )
         self.application.add_handler(user.ticket_conv_handler)
         self.application.add_handler(user.reply_conv_handler)
-        self.application.add_handler(CallbackQueryHandler(user.handle_callback, pattern="^(?!admin_).*"))
+        self.application.add_handler(
+            CallbackQueryHandler(user.handle_callback, pattern="^(?!admin_|reply_|progress_).*")
+        )
         
-        # Group handlers
-        self.application.add_handler(CommandHandler("support", group.support_command))
-        self.application.add_handler(MessageHandler(filters.ChatType.GROUPS, group.handle_group_message))
+        # ==================== GROUP HANDLERS ====================
+        # /support command works in allowed groups
+        self.application.add_handler(
+            CommandHandler("support", group.support_command)
+        )
         
-        # Admin handlers (admin group only) - with debug wrapper
-        async def admin_stats_wrapper(update: Update, context):
-            logger.info(f"Admin stats called from chat_id: {update.effective_chat.id}")
-            logger.info(f"Expected admin group ID: {Config.ADMIN_GROUP_ID}")
-            logger.info(f"Match: {update.effective_chat.id == Config.ADMIN_GROUP_ID}")
-            await admin.admin_stats(update, context)
+        # ==================== ADMIN HANDLERS (Admin Group Only) ====================
+        # Single handler for all admin commands
+        self.application.add_handler(
+            MessageHandler(
+                filters.COMMAND & filters.Chat(Config.ADMIN_GROUP_ID),
+                admin.admin_command_handler
+            )
+        )
         
-        async def admin_pending_wrapper(update: Update, context):
-            logger.info(f"Admin pending called from chat_id: {update.effective_chat.id}")
-            await admin.admin_pending(update, context)
+        # Admin callback handler for buttons
+        self.application.add_handler(
+            CallbackQueryHandler(
+                admin.admin_callback_handler,
+                pattern="^(admin_|reply_|progress_)"
+            )
+        )
         
-        async def admin_search_wrapper(update: Update, context):
-            logger.info(f"Admin search called from chat_id: {update.effective_chat.id}")
-            await admin.admin_search(update, context)
+        # Admin reply handler for text messages (replies to tickets)
+        self.application.add_handler(
+            MessageHandler(
+                filters.Chat(Config.ADMIN_GROUP_ID) & filters.TEXT & ~filters.COMMAND,
+                admin.admin_reply_handler
+            )
+        )
         
-        async def admin_getdata_wrapper(update: Update, context):
-            logger.info(f"Admin getdata called from chat_id: {update.effective_chat.id}")
-            await admin.admin_getdata(update, context)
+        # ==================== SUPER ADMIN HANDLERS (Private Chat Only) ====================
+        self.application.add_handler(
+            CommandHandler("super", super_admin.super_admin_panel, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("addgroup", super_admin.add_group, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("removegroup", super_admin.remove_group, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("listgroups", super_admin.list_groups, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("broadcast", super_admin.broadcast, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("superstats", super_admin.super_stats, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("backup", super_admin.backup_database, filters=filters.ChatType.PRIVATE)
+        )
+        self.application.add_handler(
+            CommandHandler("categories", super_admin.manage_categories, filters=filters.ChatType.PRIVATE)
+        )
         
-        async def admin_start_wrapper(update: Update, context):
-            logger.info(f"Admin start called from chat_id: {update.effective_chat.id}")
-            await admin.admin_start(update, context)
-        
-        # Add handlers with debug wrappers
-        self.application.add_handler(CommandHandler("stats", admin_stats_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("pending", admin_pending_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("search", admin_search_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("getdata", admin_getdata_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("admin", admin_start_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        
-        # Admin callback handlers
-        self.application.add_handler(CallbackQueryHandler(admin.admin_callback_handler, pattern="^admin_.*|^progress_.*|^close_.*|^view_user_.*|^pending_page_.*"))
-        
-        # Reply handler for admin group
-        self.application.add_handler(MessageHandler(
-            filters.Chat(Config.ADMIN_GROUP_ID) & filters.TEXT & ~filters.COMMAND,
-            admin.admin_handle_reply
-        ))
-        
-        # Super admin handlers (private chat only)
-        self.application.add_handler(CommandHandler("super", super_admin.super_admin_panel, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("addgroup", super_admin.add_group, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("removegroup", super_admin.remove_group, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("listgroups", super_admin.list_groups, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("broadcast", super_admin.broadcast, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("superstats", super_admin.super_stats, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("backup", super_admin.backup_database, filters=filters.ChatType.PRIVATE))
-        self.application.add_handler(CommandHandler("categories", super_admin.manage_categories, filters=filters.ChatType.PRIVATE))
-        
-        # Error handler
+        # ==================== ERROR HANDLER ====================
         self.application.add_error_handler(self._error_handler)
         
         logger.info("All handlers setup complete")
