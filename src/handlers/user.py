@@ -146,7 +146,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Each ticket is for one issue only\n"
             "• Tickets close after admin reply\n"
             "• Response time: Within 24 hours 🚀\n\n"
-            "For urgent issues, please contact support@toonpay.com"
+            "For urgent issues, please contact https://t.me/toonpaysupport"
         )
         await query.edit_message_text(help_text, reply_markup=get_start_keyboard(), parse_mode='Markdown')
 
