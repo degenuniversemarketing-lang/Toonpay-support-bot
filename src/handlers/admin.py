@@ -17,12 +17,11 @@ def is_admin_group(chat_id: int) -> bool:
 
 async def admin_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all admin commands"""
-    # Check if this is the admin group
     if not is_admin_group(update.effective_chat.id):
         return
     
     command = update.message.text.split()[0].lower()
-    logger.info(f"Admin command received: {command} in chat {update.effective_chat.id}")
+    logger.info(f"Admin command received: {command}")
     
     if command == "/admin":
         await show_admin_panel(update, context)
@@ -34,26 +33,6 @@ async def admin_command_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await search_tickets(update, context)
     elif command == "/getdata":
         await export_data(update, context)
-    elif command == "/reply":
-        await reply_command(update, context)
-
-async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /reply command"""
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: /reply <ticket_number> <message>\n"
-            "Example: /reply TKT-20240313012345 Your message here"
-        )
-        return
-    
-    ticket_number = context.args[0]
-    reply_text = ' '.join(context.args[1:]) if len(context.args) > 1 else ""
-    
-    if not reply_text:
-        await update.message.reply_text("Please provide a reply message.")
-        return
-    
-    await process_admin_reply(update, context, ticket_number, reply_text)
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show admin panel"""
@@ -71,8 +50,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stats - View statistics\n"
         "/pending - View pending tickets\n"
         "/search <term> - Search\n"
-        "/getdata - Download all data\n"
-        "/reply <ticket> <message> - Quick reply",
+        "/getdata - Download all data",
         parse_mode='Markdown',
         reply_markup=reply_markup
     )
@@ -108,11 +86,11 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show pending tickets with working reply buttons"""
+    """Show pending tickets - KEEPING YOUR WORKING VERSION"""
     try:
         tickets = db_session.query(Ticket).filter(
             Ticket.status.in_(['open', 'in_progress'])
-        ).order_by(Ticket.created_at.desc()).all()
+        ).order_by(Ticket.created_at.desc()).limit(5).all()
         
         if not tickets:
             await update.message.reply_text("No pending tickets found.")
@@ -131,11 +109,15 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Question: {ticket.question[:100]}...\n"
             )
             
-            # This is the WORKING reply button format
+            # YOUR WORKING REPLY BUTTON FORMAT
             keyboard = [[
                 InlineKeyboardButton(
                     f"📝 Reply to #{ticket.ticket_number}", 
                     callback_data=f"reply_{ticket.ticket_number}"
+                ),
+                InlineKeyboardButton(
+                    "🟡 In Progress",
+                    callback_data=f"progress_{ticket.ticket_number}"
                 )
             ]]
             
@@ -149,7 +131,7 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Search tickets - FIXED version"""
+    """Search tickets - FIXED VERSION"""
     if not context.args:
         help_text = (
             "🔍 **Search Help**\n\n"
@@ -167,22 +149,22 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Searching for: {search_term}")
     
     try:
-        # Remove @ if present for username search
+        # Remove @ if present
         clean_term = search_term.replace('@', '')
         
-        # Search by ticket number (exact match)
+        # Search by ticket number
         ticket = db_session.query(Ticket).filter_by(ticket_number=search_term).first()
         if ticket:
             user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
             text = (
                 f"🎫 **Ticket Found**\n\n"
-                f"Ticket #: {ticket.ticket_number}\n"
-                f"User: {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-                f"User ID: `{user.user_id}`\n"
-                f"Category: {ticket.category}\n"
-                f"Status: {ticket.status}\n"
-                f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                f"Question: {ticket.question}\n"
+                f"**Ticket #:** {ticket.ticket_number}\n"
+                f"**User:** {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
+                f"**User ID:** `{user.user_id}`\n"
+                f"**Category:** {ticket.category}\n"
+                f"**Status:** {ticket.status}\n"
+                f"**Created:** {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"**Question:** {ticket.question}"
             )
             
             # Add reply button
@@ -202,8 +184,7 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Search by username
         user = db_session.query(User).filter(
-            (User.username.ilike(f"%{clean_term}%")) |
-            (User.name.ilike(f"%{clean_term}%"))
+            User.username.ilike(f"%{clean_term}%")
         ).first()
         
         if user:
@@ -221,7 +202,7 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(text, parse_mode='Markdown')
                 return
         
-        await update.message.reply_text("❌ No results found.")
+        await update.message.reply_text("No results found.")
         
     except Exception as e:
         logger.error(f"Search error: {e}")
@@ -269,7 +250,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button callbacks - FIXED with working reply function"""
+    """Handle button callbacks"""
     query = update.callback_query
     await query.answer()
     
@@ -290,13 +271,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
         elif data == "admin_search":
             await query.edit_message_text(
-                "🔍 **Search Help**\n\n"
-                "Use /search command with your search term.\n\n"
-                "Examples:\n"
-                "/search TKT-20240313\n"
-                "/search @username\n"
-                "/search 123456789",
-                parse_mode='Markdown'
+                "Use /search command with your search term."
             )
         
         elif data == "admin_download":
@@ -304,11 +279,10 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.delete()
         
         elif data.startswith("reply_"):
-            # This is the WORKING reply button from /pending
             ticket_number = data.replace("reply_", "")
             context.user_data['replying_to_ticket'] = ticket_number
             await query.edit_message_text(
-                f"📝 Please type your reply for ticket #{ticket_number}:"
+                f"Please type your reply for ticket #{ticket_number}:"
             )
         
         elif data.startswith("progress_"):
@@ -320,15 +294,6 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await query.edit_message_text(
                     f"✅ Ticket #{ticket_number} marked as in progress by @{update.effective_user.username}"
                 )
-                
-                # Notify user
-                try:
-                    await context.bot.send_message(
-                        chat_id=ticket.user_id,
-                        text=f"🟡 Your ticket #{ticket_number} is now being reviewed by our support team."
-                    )
-                except:
-                    pass
         
         elif data.startswith("view_"):
             ticket_number = data.replace("view_", "")
@@ -357,7 +322,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(f"Error: {str(e)}")
 
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle admin replies to tickets - This is the WORKING function"""
+    """Handle admin replies to tickets"""
     if not is_admin_group(update.effective_chat.id):
         return
     
@@ -366,11 +331,7 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     reply_text = update.message.text
-    await process_admin_reply(update, context, ticket_number, reply_text)
-    context.user_data.pop('replying_to_ticket', None)
-
-async def process_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_number: str, reply_text: str):
-    """Process admin reply to ticket"""
+    
     try:
         ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
         
@@ -388,7 +349,6 @@ async def process_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         db_session.add(reply)
         ticket.status = 'closed'
-        ticket.updated_at = datetime.utcnow()
         db_session.commit()
         
         # Send to user
@@ -405,19 +365,19 @@ async def process_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             
             await update.message.reply_text(f"✅ Reply sent to user. Ticket #{ticket_number} closed.")
-        except Exception as e:
-            logger.error(f"Failed to send reply to user: {e}")
-            await update.message.reply_text(f"✅ Reply saved but failed to send to user. Error: {e}")
+        except:
+            await update.message.reply_text(f"✅ Reply saved but couldn't notify user.")
+        
+        context.user_data.pop('replying_to_ticket', None)
         
     except Exception as e:
-        logger.error(f"Error in process_admin_reply: {e}")
+        logger.error(f"Error in admin_reply_handler: {e}")
         await update.message.reply_text(f"Error sending reply: {str(e)}")
 
-# Function to handle new ticket notifications (called from user.py)
+# Function to send new ticket to admin group - WITH WORKING REPLY BUTTON
 async def send_ticket_to_admin_group(context, ticket, user, question):
-    """Send new ticket notification to admin group - FIXED with working reply button"""
+    """Send new ticket notification to admin group"""
     try:
-        # This is the ticket notification with WORKING reply button
         admin_text = (
             f"🆕 **New Support Ticket**\n\n"
             f"Ticket: #{ticket.ticket_number}\n"
@@ -430,7 +390,7 @@ async def send_ticket_to_admin_group(context, ticket, user, question):
             f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
         )
         
-        # Use the SAME button format that works in /pending
+        # YOUR WORKING BUTTON FORMAT
         keyboard = [[
             InlineKeyboardButton(
                 f"📝 Reply to #{ticket.ticket_number}", 
