@@ -1,11 +1,11 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import ContextTypes, CommandHandler
 from src.database import db_session
 from src.models import AllowedGroup, User, Ticket
 from src.utils.decorators import super_admin_only, private_chat_only
 from src.config import Config
 import logging
-import asyncio  # FIXED: Added missing import
+import asyncio
 from datetime import datetime, timedelta
 import json
 from io import BytesIO
@@ -138,10 +138,12 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=user.user_id,
-                text=f"📢 **Announcement:**\n\n{message}"
+                text=f"📢 **Announcement:**\n\n{message}",
+                parse_mode='Markdown'
             )
             successful += 1
-        except:
+        except Exception as e:
+            logger.error(f"Failed to send to user {user.user_id}: {e}")
             failed += 1
         
         # Small delay to avoid flood limits
@@ -158,57 +160,59 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @private_chat_only
 async def super_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Detailed statistics for super admin"""
-    from datetime import datetime, timedelta
-    
-    # Basic counts
-    total_users = db_session.query(User).count()
-    total_tickets = db_session.query(Ticket).count()
-    
-    # Active users (last 7 days)
-    week_ago = datetime.utcnow() - timedelta(days=7)
-    active_users = db_session.query(User).filter(User.last_active >= week_ago).count()
-    
-    # Tickets by status
-    open_tickets = db_session.query(Ticket).filter_by(status='open').count()
-    in_progress = db_session.query(Ticket).filter_by(status='in_progress').count()
-    closed_tickets = db_session.query(Ticket).filter_by(status='closed').count()
-    
-    # Tickets by category
-    categories = {}
-    for cat_key, cat_name in Config.CATEGORIES.items():
-        count = db_session.query(Ticket).filter_by(category=cat_key).count()
-        categories[cat_name] = count
-    
-    # Daily ticket stats (last 7 days)
-    daily_stats = []
-    for i in range(7):
-        day = datetime.utcnow().date() - timedelta(days=i)
-        count = db_session.query(Ticket).filter(
-            Ticket.created_at >= day,
-            Ticket.created_at < day + timedelta(days=1)
-        ).count()
-        daily_stats.append(f"{day.strftime('%m/%d')}: {count}")
-    
-    text = (
-        f"📊 **Super Admin Statistics**\n\n"
-        f"**Users:**\n"
-        f"Total: {total_users}\n"
-        f"Active (7d): {active_users}\n\n"
-        f"**Tickets:**\n"
-        f"Total: {total_tickets}\n"
-        f"🟢 Open: {open_tickets}\n"
-        f"🟡 In Progress: {in_progress}\n"
-        f"🔴 Closed: {closed_tickets}\n\n"
-        f"**Categories:**\n"
-    )
-    
-    for cat_name, count in categories.items():
-        text += f"• {cat_name}: {count}\n"
-    
-    text += f"\n**Daily Tickets (Last 7 days):**\n"
-    text += '\n'.join(reversed(daily_stats))
-    
-    await update.message.reply_text(text, parse_mode='Markdown')
+    try:
+        # Basic counts
+        total_users = db_session.query(User).count()
+        total_tickets = db_session.query(Ticket).count()
+        
+        # Active users (last 7 days)
+        week_ago = datetime.utcnow() - timedelta(days=7)
+        active_users = db_session.query(User).filter(User.last_active >= week_ago).count()
+        
+        # FIXED: Using string values instead of enum
+        open_tickets = db_session.query(Ticket).filter_by(status='open').count()
+        in_progress = db_session.query(Ticket).filter_by(status='in_progress').count()
+        closed_tickets = db_session.query(Ticket).filter_by(status='closed').count()
+        
+        # Tickets by category
+        categories = {}
+        for cat_key, cat_name in Config.CATEGORIES.items():
+            count = db_session.query(Ticket).filter_by(category=cat_key).count()
+            categories[cat_name] = count
+        
+        # Daily ticket stats (last 7 days)
+        daily_stats = []
+        for i in range(7):
+            day = datetime.utcnow().date() - timedelta(days=i)
+            count = db_session.query(Ticket).filter(
+                Ticket.created_at >= day,
+                Ticket.created_at < day + timedelta(days=1)
+            ).count()
+            daily_stats.append(f"{day.strftime('%m/%d')}: {count}")
+        
+        text = (
+            f"📊 **Super Admin Statistics**\n\n"
+            f"**Users:**\n"
+            f"Total: {total_users}\n"
+            f"Active (7d): {active_users}\n\n"
+            f"**Tickets:**\n"
+            f"Total: {total_tickets}\n"
+            f"🟢 Open: {open_tickets}\n"
+            f"🟡 In Progress: {in_progress}\n"
+            f"🔴 Closed: {closed_tickets}\n\n"
+            f"**Categories:**\n"
+        )
+        
+        for cat_name, count in categories.items():
+            text += f"• {cat_name}: {count}\n"
+        
+        text += f"\n**Daily Tickets (Last 7 days):**\n"
+        text += '\n'.join(reversed(daily_stats))
+        
+        await update.message.reply_text(text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in super_stats: {e}")
+        await update.message.reply_text(f"Error getting statistics: {str(e)}")
 
 @super_admin_only
 @private_chat_only
@@ -216,48 +220,65 @@ async def backup_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Create database backup"""
     await update.message.reply_text("🔄 Creating backup...")
     
-    # Export users
-    users = db_session.query(User).all()
-    users_data = []
-    for user in users:
-        users_data.append({
-            'user_id': user.user_id,
-            'username': user.username,
-            'name': user.name,
-            'email': user.email,
-            'phone': user.phone,
-            'created_at': user.created_at.isoformat() if user.created_at else None
-        })
-    
-    # Export tickets
-    tickets = db_session.query(Ticket).all()
-    tickets_data = []
-    for ticket in tickets:
-        tickets_data.append({
-            'ticket_number': ticket.ticket_number,
-            'user_id': ticket.user_id,
-            'category': ticket.category,
-            'question': ticket.question,
-            'status': ticket.status.value if hasattr(ticket.status, 'value') else str(ticket.status),
-            'created_at': ticket.created_at.isoformat() if ticket.created_at else None
-        })
-    
-    backup_data = {
-        'users': users_data,
-        'tickets': tickets_data,
-        'backup_date': datetime.utcnow().isoformat()
-    }
-    
-    # Create file
-    backup_file = BytesIO()
-    backup_file.write(json.dumps(backup_data, indent=2).encode())
-    backup_file.seek(0)
-    
-    await update.message.reply_document(
-        document=backup_file,
-        filename=f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-        caption="✅ Database backup completed"
-    )
+    try:
+        # Export users
+        users = db_session.query(User).all()
+        users_data = []
+        for user in users:
+            users_data.append({
+                'user_id': user.user_id,
+                'username': user.username,
+                'name': user.name,
+                'email': user.email,
+                'phone': user.phone,
+                'created_at': user.created_at.isoformat() if user.created_at else None,
+                'last_active': user.last_active.isoformat() if user.last_active else None
+            })
+        
+        # Export tickets
+        tickets = db_session.query(Ticket).all()
+        tickets_data = []
+        for ticket in tickets:
+            # Get replies for this ticket
+            replies = []
+            for reply in ticket.replies:
+                replies.append({
+                    'admin_id': reply.admin_id,
+                    'admin_username': reply.admin_username,
+                    'message': reply.message,
+                    'created_at': reply.created_at.isoformat() if reply.created_at else None
+                })
+            
+            tickets_data.append({
+                'ticket_number': ticket.ticket_number,
+                'user_id': ticket.user_id,
+                'category': ticket.category,
+                'question': ticket.question,
+                'status': ticket.status,
+                'created_at': ticket.created_at.isoformat() if ticket.created_at else None,
+                'updated_at': ticket.updated_at.isoformat() if ticket.updated_at else None,
+                'replies': replies
+            })
+        
+        backup_data = {
+            'users': users_data,
+            'tickets': tickets_data,
+            'backup_date': datetime.utcnow().isoformat()
+        }
+        
+        # Create file
+        backup_file = BytesIO()
+        backup_file.write(json.dumps(backup_data, indent=2).encode())
+        backup_file.seek(0)
+        
+        await update.message.reply_document(
+            document=backup_file,
+            filename=f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            caption="✅ Database backup completed"
+        )
+    except Exception as e:
+        logger.error(f"Error in backup_database: {e}")
+        await update.message.reply_text(f"Error creating backup: {str(e)}")
 
 @super_admin_only
 @private_chat_only
