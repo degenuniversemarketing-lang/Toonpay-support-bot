@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.database import db_session
 from src.models import User, Ticket, TicketReply
@@ -41,7 +41,7 @@ async def admin_command_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await reply_to_ticket(update, context)
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show admin panel without buttons"""
+    """Show admin panel"""
     text = (
         "👨‍💼 **Admin Control Panel**\n\n"
         "Available commands:\n"
@@ -94,8 +94,6 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No pending tickets found.")
             return
         
-        await update.message.reply_text(f"⏳ **Found {len(tickets)} pending tickets:**\n")
-        
         for ticket in tickets:
             user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
             status_emoji = '🟡' if ticket.status == 'in_progress' else '🟢'
@@ -107,13 +105,181 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"**Status:** {ticket.status}\n"
                 f"**Created:** {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
                 f"**Question:** {ticket.question[:100]}...\n"
-                f"**Reply:** `/reply {ticket.ticket_number} your message`\n"
             )
             
-            await update.message.reply_text(text, parse_mode='Markdown')
+            # Create inline keyboard with 4 buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Reply", callback_data=f"reply_{ticket.ticket_number}"),
+                    InlineKeyboardButton("⏳ In Progress", callback_data=f"progress_{ticket.ticket_number}")
+                ],
+                [
+                    InlineKeyboardButton("👤 View User", callback_data=f"viewuser_{ticket.user_id}"),
+                    InlineKeyboardButton("❌ Close", callback_data=f"close_{ticket.ticket_number}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in show_pending: {e}")
         await update.message.reply_text(f"Error showing pending tickets: {str(e)}")
+
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button callbacks from admin group"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Check if this is from admin group
+    if not is_admin_group(query.message.chat.id):
+        await query.edit_message_text("This action is only allowed in admin group.")
+        return
+    
+    data = query.data
+    logger.info(f"Admin callback received: {data} from user {update.effective_user.id}")
+    
+    try:
+        if data.startswith("reply_"):
+            ticket_number = data.replace("reply_", "")
+            context.user_data['replying_to_ticket'] = ticket_number
+            await query.edit_message_text(
+                f"Please type your reply for ticket #{ticket_number}:\n\n"
+                f"Or use: /reply {ticket_number} your message"
+            )
+            
+        elif data.startswith("progress_"):
+            ticket_number = data.replace("progress_", "")
+            ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+            if ticket:
+                ticket.status = 'in_progress'
+                ticket.updated_at = datetime.utcnow()
+                db_session.commit()
+                
+                await query.edit_message_text(
+                    f"✅ Ticket #{ticket_number} marked as in progress by @{update.effective_user.username}"
+                )
+                
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=ticket.user_id,
+                        text=f"🟡 Your ticket #{ticket_number} is now being reviewed by our support team."
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify user: {e}")
+        
+        elif data.startswith("close_"):
+            ticket_number = data.replace("close_", "")
+            ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+            if ticket:
+                ticket.status = 'closed'
+                ticket.updated_at = datetime.utcnow()
+                db_session.commit()
+                
+                await query.edit_message_text(
+                    f"✅ Ticket #{ticket_number} closed by @{update.effective_user.username}"
+                )
+                
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=ticket.user_id,
+                        text=f"🔴 Your ticket #{ticket_number} has been closed. If you need further assistance, please create a new ticket."
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify user: {e}")
+        
+        elif data.startswith("viewuser_"):
+            user_id = int(data.replace("viewuser_", ""))
+            user = db_session.query(User).filter_by(user_id=user_id).first()
+            if user:
+                tickets = db_session.query(Ticket).filter_by(user_id=user_id).order_by(Ticket.created_at.desc()).all()
+                
+                text = (
+                    f"👤 **User Details**\n\n"
+                    f"**Name:** {user.name or 'N/A'}\n"
+                    f"**Username:** @{user.username or 'N/A'}\n"
+                    f"**User ID:** `{user.user_id}`\n"
+                    f"**Email:** {user.email or 'N/A'}\n"
+                    f"**Phone:** {user.phone or 'N/A'}\n"
+                    f"**Joined:** {user.created_at.strftime('%Y-%m-%d')}\n\n"
+                    f"**Total Tickets:** {len(tickets)}"
+                )
+                
+                await query.edit_message_text(text, parse_mode='Markdown')
+    
+    except Exception as e:
+        logger.error(f"Error in admin_callback_handler: {e}")
+        await query.edit_message_text(f"Error: {str(e)}")
+
+async def reply_to_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply to a ticket using /reply command"""
+    if not update or not update.effective_chat or not update.message:
+        return
+    
+    if not is_admin_group(update.effective_chat.id):
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: /reply <ticket_number> <your message>\n"
+            "Example: /reply TKT-20240313 Your issue has been resolved"
+        )
+        return
+    
+    ticket_number = context.args[0]
+    reply_text = ' '.join(context.args[1:])
+    
+    logger.info(f"Admin reply to ticket {ticket_number}: {reply_text[:50]}...")
+    
+    try:
+        ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+        
+        if not ticket:
+            await update.message.reply_text(f"❌ Ticket #{ticket_number} not found.")
+            return
+        
+        # Save reply
+        reply = TicketReply(
+            ticket_id=ticket.id,
+            admin_id=update.effective_user.id,
+            admin_username=update.effective_user.username or "Admin",
+            message=reply_text
+        )
+        
+        db_session.add(reply)
+        ticket.status = 'closed'
+        ticket.updated_at = datetime.utcnow()
+        db_session.commit()
+        
+        # Get user info
+        user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+        
+        # Send to user
+        try:
+            user_text = (
+                f"📨 **Reply to your ticket #{ticket_number}**\n\n"
+                f"**Support Team:** {reply_text}\n\n"
+                f"This ticket is now closed. If you need further assistance, please create a new ticket."
+            )
+            await context.bot.send_message(
+                chat_id=ticket.user_id,
+                text=user_text,
+                parse_mode='Markdown'
+            )
+            
+            await update.message.reply_text(
+                f"✅ Reply sent to @{user.username if user else 'user'}. Ticket #{ticket_number} closed."
+            )
+        except Exception as e:
+            logger.error(f"Failed to send to user: {e}")
+            await update.message.reply_text(
+                f"✅ Reply saved but failed to notify user. They will see it when they start the bot."
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in reply_to_ticket: {e}")
+        await update.message.reply_text(f"Error sending reply: {str(e)}")
 
 async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Search users or tickets"""
@@ -221,75 +387,6 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in search_tickets: {e}")
         await update.message.reply_text(f"Error searching: {str(e)}")
 
-async def reply_to_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reply to a ticket using /reply command"""
-    if not update or not update.effective_chat or not update.message:
-        return
-    
-    if not is_admin_group(update.effective_chat.id):
-        return
-    
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "Usage: /reply <ticket_number> <your message>\n"
-            "Example: /reply TKT-20240313 Your issue has been resolved"
-        )
-        return
-    
-    ticket_number = context.args[0]
-    reply_text = ' '.join(context.args[1:])
-    
-    logger.info(f"Admin reply to ticket {ticket_number}: {reply_text[:50]}...")
-    
-    try:
-        ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
-        
-        if not ticket:
-            await update.message.reply_text(f"❌ Ticket #{ticket_number} not found.")
-            return
-        
-        # Save reply
-        reply = TicketReply(
-            ticket_id=ticket.id,
-            admin_id=update.effective_user.id,
-            admin_username=update.effective_user.username or "Admin",
-            message=reply_text
-        )
-        
-        db_session.add(reply)
-        ticket.status = 'closed'
-        ticket.updated_at = datetime.utcnow()
-        db_session.commit()
-        
-        # Get user info
-        user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
-        
-        # Send to user
-        try:
-            user_text = (
-                f"📨 **Reply to your ticket #{ticket_number}**\n\n"
-                f"**Support Team:** {reply_text}\n\n"
-                f"This ticket is now closed. If you need further assistance, please create a new ticket."
-            )
-            await context.bot.send_message(
-                chat_id=ticket.user_id,
-                text=user_text,
-                parse_mode='Markdown'
-            )
-            
-            await update.message.reply_text(
-                f"✅ Reply sent to @{user.username if user else 'user'}. Ticket #{ticket_number} closed."
-            )
-        except Exception as e:
-            logger.error(f"Failed to send to user: {e}")
-            await update.message.reply_text(
-                f"✅ Reply saved but failed to notify user. Error: {str(e)}"
-            )
-            
-    except Exception as e:
-        logger.error(f"Error in reply_to_ticket: {e}")
-        await update.message.reply_text(f"Error sending reply: {str(e)}")
-
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Export all data"""
     try:
@@ -315,7 +412,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'Admin Answer': reply.message if reply else '',
                 'Admin Username': reply.admin_username if reply else '',
                 'Created At': ticket.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'Closed At': ticket.updated_at.strftime('%Y-%m-%d %H:%M:%S') if ticket.status == 'closed' else ''
+                'Updated At': ticket.updated_at.strftime('%Y-%m-%d %H:%M:%S')
             })
         
         df = pd.DataFrame(data)
