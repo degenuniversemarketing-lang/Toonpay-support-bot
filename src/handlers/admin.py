@@ -212,6 +212,75 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"Error in admin_callback_handler: {e}")
         await query.edit_message_text(f"Error: {str(e)}")
 
+async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages when admin is replying to a ticket (from button click)"""
+    if not update or not update.effective_chat or not update.message:
+        return
+    
+    if not is_admin_group(update.effective_chat.id):
+        return
+    
+    # Check if we're expecting a reply
+    ticket_number = context.user_data.get('replying_to_ticket')
+    if not ticket_number:
+        return
+    
+    reply_text = update.message.text
+    logger.info(f"Admin reply via button to ticket {ticket_number}: {reply_text[:50]}...")
+    
+    try:
+        ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+        
+        if not ticket:
+            await update.message.reply_text(f"❌ Ticket #{ticket_number} not found.")
+            context.user_data.pop('replying_to_ticket', None)
+            return
+        
+        # Save reply
+        reply = TicketReply(
+            ticket_id=ticket.id,
+            admin_id=update.effective_user.id,
+            admin_username=update.effective_user.username or "Admin",
+            message=reply_text
+        )
+        
+        db_session.add(reply)
+        ticket.status = 'closed'
+        ticket.updated_at = datetime.utcnow()
+        db_session.commit()
+        
+        # Get user info
+        user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+        
+        # Send to user
+        try:
+            user_text = (
+                f"📨 **Reply to your ticket #{ticket_number}**\n\n"
+                f"**Support Team:** {reply_text}\n\n"
+                f"This ticket is now closed. If you need further assistance, please create a new ticket."
+            )
+            await context.bot.send_message(
+                chat_id=ticket.user_id,
+                text=user_text,
+                parse_mode='Markdown'
+            )
+            
+            await update.message.reply_text(
+                f"✅ Reply sent to @{user.username if user else 'user'}. Ticket #{ticket_number} closed."
+            )
+        except Exception as e:
+            logger.error(f"Failed to send to user: {e}")
+            await update.message.reply_text(
+                f"✅ Reply saved but failed to notify user. They will see it when they start the bot."
+            )
+        
+        context.user_data.pop('replying_to_ticket', None)
+        
+    except Exception as e:
+        logger.error(f"Error in admin_reply_handler: {e}")
+        await update.message.reply_text(f"Error sending reply: {str(e)}")
+        context.user_data.pop('replying_to_ticket', None)
+
 async def reply_to_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reply to a ticket using /reply command"""
     if not update or not update.effective_chat or not update.message:
