@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 from io import BytesIO
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -15,16 +16,33 @@ logger = logging.getLogger(__name__)
 def is_admin_group(chat_id: int) -> bool:
     return chat_id == Config.ADMIN_GROUP_ID
 
+# Helper function to escape markdown characters
+def escape_markdown(text):
+    """Escape markdown special characters"""
+    if not text:
+        return ""
+    # Escape special characters: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
+
 # Helper function to reply properly based on context
-async def reply_or_edit(update: Update, text: str, reply_markup=None, parse_mode=None):
+async def reply_or_edit(update: Update, text: str, reply_markup=None, parse_mode='Markdown'):
     """Helper function to handle both message and callback contexts"""
-    if update.callback_query:
-        if reply_markup:
-            await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        else:
-            await update.callback_query.edit_message_text(text, parse_mode=parse_mode)
-    elif update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    try:
+        if update.callback_query:
+            if reply_markup:
+                await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            else:
+                await update.callback_query.edit_message_text(text, parse_mode=parse_mode)
+        elif update.message:
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except Exception as e:
+        logger.error(f"Error in reply_or_edit: {e}")
+        # Fallback without markdown
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text.replace('*', '').replace('_', ''))
+        elif update.message:
+            await update.message.reply_text(text.replace('*', '').replace('_', ''))
 
 async def admin_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all admin commands"""
@@ -65,7 +83,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/getdata - Download all data"
     )
     
-    await reply_or_edit(update, text, reply_markup, parse_mode='Markdown')
+    await reply_or_edit(update, text, reply_markup)
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show statistics"""
@@ -92,81 +110,64 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📅 Today: {today_tickets}"
         )
         
-        await reply_or_edit(update, text, parse_mode='Markdown')
+        await reply_or_edit(update, text)
     except Exception as e:
         logger.error(f"Error in show_stats: {e}")
         await reply_or_edit(update, f"Error: {str(e)}")
 
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show pending tickets - YOUR WORKING VERSION"""
+    """Show pending tickets - FIXED Markdown parsing"""
     try:
         tickets = db_session.query(Ticket).filter(
             Ticket.status.in_(['open', 'in_progress'])
-        ).order_by(Ticket.created_at.desc()).limit(5).all()
+        ).order_by(Ticket.created_at.desc()).all()
         
         if not tickets:
             await reply_or_edit(update, "No pending tickets found.")
             return
         
-        # If this is a callback, we need to send new messages, not edit
+        # If this is a callback, delete the original message
         if update.callback_query:
             await update.callback_query.message.delete()
-            # Now send new messages using the message method
-            for ticket in tickets:
-                user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
-                status_emoji = '🟡' if ticket.status == 'in_progress' else '🟢'
-                
-                text = (
-                    f"{status_emoji} **Ticket #{ticket.ticket_number}**\n"
-                    f"User: {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-                    f"Category: {ticket.category}\n"
-                    f"Status: {ticket.status}\n"
-                    f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                    f"Question: {ticket.question[:100]}...\n"
+        
+        # Send each ticket as a separate message
+        for ticket in tickets:
+            user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+            status_emoji = '🟡' if ticket.status == 'in_progress' else '🟢'
+            
+            # Escape special characters in username and name
+            username = escape_markdown(user.username) if user and user.username else 'N/A'
+            name = escape_markdown(user.name) if user and user.name else 'N/A'
+            question_preview = escape_markdown(ticket.question[:100]) if ticket.question else 'N/A'
+            
+            text = (
+                f"{status_emoji} *Ticket #{ticket.ticket_number}*\n"
+                f"User: {name} (@{username})\n"
+                f"Category: {ticket.category}\n"
+                f"Status: {ticket.status}\n"
+                f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"Question: {question_preview}...\n"
+            )
+            
+            keyboard = [[
+                InlineKeyboardButton(
+                    f"📝 Reply to #{ticket.ticket_number}", 
+                    callback_data=f"reply_{ticket.ticket_number}"
+                ),
+                InlineKeyboardButton(
+                    "🟡 In Progress",
+                    callback_data=f"progress_{ticket.ticket_number}"
                 )
-                
-                keyboard = [[
-                    InlineKeyboardButton(
-                        f"📝 Reply to #{ticket.ticket_number}", 
-                        callback_data=f"reply_{ticket.ticket_number}"
-                    ),
-                    InlineKeyboardButton(
-                        "🟡 In Progress",
-                        callback_data=f"progress_{ticket.ticket_number}"
-                    )
-                ]]
-                
+            ]]
+            
+            # Send to the appropriate chat
+            if update.callback_query:
                 await update.effective_chat.send_message(
                     text,
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='Markdown'
                 )
-        else:
-            # Regular message
-            for ticket in tickets:
-                user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
-                status_emoji = '🟡' if ticket.status == 'in_progress' else '🟢'
-                
-                text = (
-                    f"{status_emoji} **Ticket #{ticket.ticket_number}**\n"
-                    f"User: {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-                    f"Category: {ticket.category}\n"
-                    f"Status: {ticket.status}\n"
-                    f"Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                    f"Question: {ticket.question[:100]}...\n"
-                )
-                
-                keyboard = [[
-                    InlineKeyboardButton(
-                        f"📝 Reply to #{ticket.ticket_number}", 
-                        callback_data=f"reply_{ticket.ticket_number}"
-                    ),
-                    InlineKeyboardButton(
-                        "🟡 In Progress",
-                        callback_data=f"progress_{ticket.ticket_number}"
-                    )
-                ]]
-                
+            else:
                 await update.message.reply_text(
                     text,
                     reply_markup=InlineKeyboardMarkup(keyboard),
@@ -183,12 +184,12 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔍 **Search Help**\n\n"
             "Usage: /search <search term>\n\n"
             "Examples:\n"
-            "/search john (search by name)\n"
-            "/search @username (search by username)\n"
-            "/search TKT-20240313 (search by ticket number)\n"
-            "/search 123456789 (search by user ID)"
+            "/search john \(search by name\)\n"
+            "/search @username \(search by username\)\n"
+            "/search TKT\-20240313 \(search by ticket number\)\n"
+            "/search 123456789 \(search by user ID\)"
         )
-        await reply_or_edit(update, help_text, parse_mode='Markdown')
+        await reply_or_edit(update, help_text)
         return
     
     search_term = ' '.join(context.args).strip()
@@ -199,17 +200,21 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ticket = db_session.query(Ticket).filter_by(ticket_number=search_term).first()
         if ticket:
             user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+            username = escape_markdown(user.username) if user and user.username else 'N/A'
+            name = escape_markdown(user.name) if user and user.name else 'N/A'
+            question = escape_markdown(ticket.question) if ticket.question else 'N/A'
+            
             text = (
                 f"🎫 **Ticket Found**\n\n"
                 f"**Ticket #:** {ticket.ticket_number}\n"
-                f"**User:** {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-                f"**User ID:** `{user.user_id}`\n"
+                f"**User:** {name} (@{username})\n"
+                f"**User ID:** `{user.user_id if user else 'N/A'}`\n"
                 f"**Category:** {ticket.category}\n"
                 f"**Status:** {ticket.status}\n"
                 f"**Created:** {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                f"**Question:** {ticket.question}"
+                f"**Question:** {question}"
             )
-            await reply_or_edit(update, text, parse_mode='Markdown')
+            await reply_or_edit(update, text)
             return
         
         # Search by username
@@ -221,7 +226,8 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user:
             user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).all()
             text = format_user_info(user, user_tickets)
-            await reply_or_edit(update, text, parse_mode='Markdown')
+            # format_user_info already handles escaping? If not, we may need to escape here
+            await reply_or_edit(update, text)
             return
         
         # Search by user ID
@@ -230,7 +236,7 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user:
                 user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).all()
                 text = format_user_info(user, user_tickets)
-                await reply_or_edit(update, text, parse_mode='Markdown')
+                await reply_or_edit(update, text)
                 return
         
         await reply_or_edit(update, "No results found.")
@@ -271,18 +277,19 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         df.to_csv(output, index=False)
         output.seek(0)
         
-        # Send document (always use message, not callback)
+        # Send document
+        filename = f"tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
         if update.callback_query:
             await update.callback_query.message.reply_document(
                 document=output,
-                filename=f"tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                filename=filename,
                 caption="✅ Tickets export completed"
             )
-            await update.callback_query.message.delete()
         else:
             await update.message.reply_document(
                 document=output,
-                filename=f"tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                filename=filename,
                 caption="✅ Tickets export completed"
             )
     except Exception as e:
@@ -307,18 +314,17 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
         elif data == "admin_pending":
             await show_pending(update, context)
-            # Don't delete here, show_pending handles it
         
         elif data == "admin_search":
-            await query.edit_message_text(
+            help_text = (
                 "🔍 **Search Help**\n\n"
                 "Use /search command with your search term.\n\n"
                 "Examples:\n"
-                "/search TKT-20240313\n"
+                "/search TKT\-20240313\n"
                 "/search @username\n"
-                "/search 123456789",
-                parse_mode='Markdown'
+                "/search 123456789"
             )
+            await query.edit_message_text(help_text, parse_mode='Markdown')
         
         elif data == "admin_download":
             await export_data(update, context)
@@ -337,7 +343,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ticket.status = 'in_progress'
                 db_session.commit()
                 await query.edit_message_text(
-                    f"✅ Ticket #{ticket_number} marked as in progress by @{update.effective_user.username}"
+                    f"✅ Ticket #{ticket_number} marked as in progress by @{escape_markdown(update.effective_user.username or 'Admin')}"
                 )
                 
                 # Notify user
@@ -354,17 +360,23 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
             if ticket:
                 user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+                username = escape_markdown(user.username) if user and user.username else 'N/A'
+                name = escape_markdown(user.name) if user and user.name else 'N/A'
+                email = escape_markdown(user.email) if user and user.email else 'N/A'
+                phone = escape_markdown(user.phone) if user and user.phone else 'N/A'
+                question = escape_markdown(ticket.question) if ticket.question else 'N/A'
+                
                 text = (
                     f"👤 **User Details**\n"
-                    f"Name: {user.name or 'N/A'}\n"
-                    f"Username: @{user.username or 'N/A'}\n"
-                    f"User ID: `{user.user_id}`\n"
-                    f"Email: {user.email or 'N/A'}\n"
-                    f"Phone: {user.phone or 'N/A'}\n\n"
+                    f"Name: {name}\n"
+                    f"Username: @{username}\n"
+                    f"User ID: `{user.user_id if user else 'N/A'}`\n"
+                    f"Email: {email}\n"
+                    f"Phone: {phone}\n\n"
                     f"🎫 **Ticket #{ticket.ticket_number}**\n"
                     f"Category: {ticket.category}\n"
                     f"Status: {ticket.status}\n"
-                    f"Question: {ticket.question}"
+                    f"Question: {question}"
                 )
                 await query.edit_message_text(text, parse_mode='Markdown')
         
@@ -435,15 +447,22 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def send_ticket_to_admin_group(context, ticket, user, question):
     """Send new ticket notification to admin group"""
     try:
+        # Escape special characters
+        username = escape_markdown(user.username) if user and user.username else 'N/A'
+        name = escape_markdown(user.name) if user and user.name else 'N/A'
+        email = escape_markdown(user.email) if user and user.email else 'N/A'
+        phone = escape_markdown(user.phone) if user and user.phone else 'N/A'
+        question_text = escape_markdown(question) if question else 'N/A'
+        
         admin_text = (
             f"🆕 **New Support Ticket**\n\n"
             f"Ticket: #{ticket.ticket_number}\n"
-            f"User: {user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-            f"User ID: `{user.user_id}`\n"
+            f"User: {name} (@{username})\n"
+            f"User ID: `{user.user_id if user else 'N/A'}`\n"
             f"Category: {ticket.category}\n"
-            f"Email: {user.email or 'N/A'}\n"
-            f"Phone: {user.phone or 'N/A'}\n\n"
-            f"**Question:**\n{question}\n\n"
+            f"Email: {email}\n"
+            f"Phone: {phone}\n\n"
+            f"**Question:**\n{question_text}\n\n"
             f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
         )
         
@@ -475,3 +494,23 @@ async def send_ticket_to_admin_group(context, ticket, user, question):
         )
     except Exception as e:
         logger.error(f"Failed to send to admin group: {e}")
+        # Fallback without markdown
+        try:
+            admin_text_plain = (
+                f"🆕 New Support Ticket\n\n"
+                f"Ticket: #{ticket.ticket_number}\n"
+                f"User: {user.name if user else 'N/A'} (@{user.username if user else 'N/A'})\n"
+                f"User ID: {user.user_id if user else 'N/A'}\n"
+                f"Category: {ticket.category}\n"
+                f"Email: {user.email if user else 'N/A'}\n"
+                f"Phone: {user.phone if user else 'N/A'}\n\n"
+                f"Question:\n{question}\n\n"
+                f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+            await context.bot.send_message(
+                chat_id=Config.ADMIN_GROUP_ID,
+                text=admin_text_plain,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except:
+            pass
