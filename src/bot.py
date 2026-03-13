@@ -27,7 +27,7 @@ from src.handlers import (
 # Set up logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.DEBUG  # Changed to DEBUG for more details
 )
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,10 @@ class ToonPaySupportBot:
     def _setup_handlers(self):
         """Setup all bot handlers"""
         
+        # Log admin group ID for debugging
+        logger.info(f"ADMIN_GROUP_ID from config: {Config.ADMIN_GROUP_ID}")
+        logger.info(f"Type of ADMIN_GROUP_ID: {type(Config.ADMIN_GROUP_ID)}")
+        
         # User handlers (private chat only)
         self.application.add_handler(CommandHandler("start", user.start, filters=filters.ChatType.PRIVATE))
         self.application.add_handler(user.ticket_conv_handler)
@@ -58,12 +62,35 @@ class ToonPaySupportBot:
         self.application.add_handler(CommandHandler("support", group.support_command))
         self.application.add_handler(MessageHandler(filters.ChatType.GROUPS, group.handle_group_message))
         
-        # Admin handlers (admin group only)
-        self.application.add_handler(CommandHandler("stats", admin.admin_stats, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("pending", admin.admin_pending, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("search", admin.admin_search, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("getdata", admin.admin_getdata, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
-        self.application.add_handler(CommandHandler("admin", admin.admin_start, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
+        # Admin handlers (admin group only) - with debug wrapper
+        async def admin_stats_wrapper(update: Update, context):
+            logger.info(f"Admin stats called from chat_id: {update.effective_chat.id}")
+            logger.info(f"Expected admin group ID: {Config.ADMIN_GROUP_ID}")
+            logger.info(f"Match: {update.effective_chat.id == Config.ADMIN_GROUP_ID}")
+            await admin.admin_stats(update, context)
+        
+        async def admin_pending_wrapper(update: Update, context):
+            logger.info(f"Admin pending called from chat_id: {update.effective_chat.id}")
+            await admin.admin_pending(update, context)
+        
+        async def admin_search_wrapper(update: Update, context):
+            logger.info(f"Admin search called from chat_id: {update.effective_chat.id}")
+            await admin.admin_search(update, context)
+        
+        async def admin_getdata_wrapper(update: Update, context):
+            logger.info(f"Admin getdata called from chat_id: {update.effective_chat.id}")
+            await admin.admin_getdata(update, context)
+        
+        async def admin_start_wrapper(update: Update, context):
+            logger.info(f"Admin start called from chat_id: {update.effective_chat.id}")
+            await admin.admin_start(update, context)
+        
+        # Add handlers with debug wrappers
+        self.application.add_handler(CommandHandler("stats", admin_stats_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
+        self.application.add_handler(CommandHandler("pending", admin_pending_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
+        self.application.add_handler(CommandHandler("search", admin_search_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
+        self.application.add_handler(CommandHandler("getdata", admin_getdata_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
+        self.application.add_handler(CommandHandler("admin", admin_start_wrapper, filters=filters.Chat(Config.ADMIN_GROUP_ID)))
         
         # Admin callback handlers
         self.application.add_handler(CallbackQueryHandler(admin.admin_callback_handler, pattern="^admin_.*|^progress_.*|^close_.*|^view_user_.*|^pending_page_.*"))
@@ -116,7 +143,7 @@ class ToonPaySupportBot:
         # Store admin group ID in bot data
         application.bot_data['admin_group_id'] = Config.ADMIN_GROUP_ID
         
-        logger.info("Bot post-initialization complete")
+        logger.info(f"Bot post-initialization complete. Admin group ID: {Config.ADMIN_GROUP_ID}")
     
     def run(self):
         """Run the bot"""
