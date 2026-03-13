@@ -12,6 +12,7 @@ from src.models import User, Ticket, TicketReply
 from src.utils.helpers import generate_ticket_number, format_user_info, format_ticket_info
 from src.keyboards.user_keyboards import get_start_keyboard, get_category_keyboard, get_ticket_action_keyboard
 from src.utils.decorators import private_chat_only
+from src.handlers.admin import send_ticket_to_admin_group  # IMPORT THE FUNCTION
 import logging
 
 # States
@@ -56,7 +57,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     data = query.data
-    logger.info(f"User callback: {data}")
     
     if data == "new_ticket":
         await query.edit_message_text(
@@ -74,12 +74,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "You haven't created any tickets yet.",
                 reply_markup=get_start_keyboard()
             )
-            return ConversationHandler.END
+            return
         
         text = "📋 **Your Recent Tickets:**\n\n"
         keyboard = []
         
         for ticket in tickets:
+            # Using string values instead of TicketStatus enum
             status_emoji = {
                 'open': '🟢',
                 'in_progress': '🟡',
@@ -99,7 +100,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-        return ConversationHandler.END
     
     elif data.startswith("cat_"):
         category = data.replace("cat_", "")
@@ -115,31 +115,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not ticket:
             await query.edit_message_text("Ticket not found.", reply_markup=get_start_keyboard())
-            return ConversationHandler.END
+            return
         
         text = format_ticket_info(ticket)
-        
-        # Only show reply button if ticket is not closed
-        keyboard = []
-        if ticket.status != 'closed':
-            keyboard.append([InlineKeyboardButton(
-                "📝 Add Reply", 
-                callback_data=f"user_reply_{ticket.ticket_number}"
-            )])
-        keyboard.append([InlineKeyboardButton("🔙 Back to Tickets", callback_data="my_tickets")])
-        
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=get_ticket_action_keyboard(ticket.ticket_number),
             parse_mode='Markdown'
         )
-        return ConversationHandler.END
     
-    elif data.startswith("user_reply_"):
-        ticket_number = data.replace("user_reply_", "")
+    elif data.startswith("reply_"):
+        ticket_number = data.replace("reply_", "")
         context.user_data['reply_ticket'] = ticket_number
         await query.edit_message_text(
-            f"Please type your reply for ticket #{ticket_number}:"
+            "Please type your reply message:"
         )
         return ENTERING_REPLY
     
@@ -148,7 +137,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Main Menu:",
             reply_markup=get_start_keyboard()
         )
-        return ConversationHandler.END
     
     elif data == "help":
         help_text = (
@@ -163,9 +151,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "For urgent issues, please contact support@toonpay.com"
         )
         await query.edit_message_text(help_text, reply_markup=get_start_keyboard(), parse_mode='Markdown')
-        return ConversationHandler.END
-    
-    return ConversationHandler.END
 
 @private_chat_only
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,13 +196,13 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_user.phone = context.user_data.get('ticket_phone', db_user.phone)
         db_user.last_active = update.message.date
     
-    # Create ticket
+    # Create ticket - using string 'open' instead of TicketStatus.OPEN
     ticket = Ticket(
         ticket_number=generate_ticket_number(),
         user_id=user.id,
         category=context.user_data.get('ticket_category', 'other'),
         question=question,
-        status='open'
+        status='open'  # Changed from TicketStatus.OPEN
     )
     
     db_session.add(ticket)
@@ -234,29 +219,35 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_start_keyboard()
     )
     
-    # Forward to admin group
+    # Forward to admin group using the WORKING function from admin.py
     try:
-        admin_text = (
-            f"🆕 **New Support Ticket**\n\n"
-            f"Ticket: #{ticket.ticket_number}\n"
-            f"User: {db_user.name or 'N/A'} (@{user.username or 'N/A'})\n"
-            f"User ID: `{user.id}`\n"
-            f"Category: {ticket.category}\n"
-            f"Email: {db_user.email or 'N/A'}\n"
-            f"Phone: {db_user.phone or 'N/A'}\n\n"
-            f"**Question:**\n{question}\n\n"
-            f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
-        )
-        
-        from src.keyboards.admin_keyboards import get_ticket_admin_keyboard
-        await context.bot.send_message(
-            chat_id=context.bot_data.get('admin_group_id'),
-            text=admin_text,
-            reply_markup=get_ticket_admin_keyboard(ticket.ticket_number, user.id),
-            parse_mode='Markdown'
-        )
+        await send_ticket_to_admin_group(context, ticket, db_user, question)
+        logger.info(f"Ticket {ticket.ticket_number} sent to admin group")
     except Exception as e:
         logger.error(f"Failed to forward to admin group: {e}")
+        # Fallback to old method if needed
+        try:
+            admin_text = (
+                f"🆕 **New Support Ticket**\n\n"
+                f"Ticket: #{ticket.ticket_number}\n"
+                f"User: {db_user.name or 'N/A'} (@{user.username or 'N/A'})\n"
+                f"User ID: `{user.id}`\n"
+                f"Category: {ticket.category}\n"
+                f"Email: {db_user.email or 'N/A'}\n"
+                f"Phone: {db_user.phone or 'N/A'}\n\n"
+                f"**Question:**\n{question}\n\n"
+                f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+            
+            from src.keyboards.admin_keyboards import get_ticket_admin_keyboard
+            await context.bot.send_message(
+                chat_id=context.bot_data.get('admin_group_id'),
+                text=admin_text,
+                reply_markup=get_ticket_admin_keyboard(ticket.ticket_number, user.id),
+                parse_mode='Markdown'
+            )
+        except Exception as e2:
+            logger.error(f"Fallback also failed: {e2}")
     
     # Clear user data
     for key in ['ticket_category', 'ticket_name', 'ticket_email', 'ticket_phone']:
@@ -271,13 +262,13 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ticket_number = context.user_data.get('reply_ticket')
     
     if not ticket_number:
-        await update.message.reply_text("Session expired. Please start over.", reply_markup=get_start_keyboard())
+        await update.message.reply_text("Session expired. Please start over.")
         return ConversationHandler.END
     
     ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
     
     if not ticket:
-        await update.message.reply_text("Ticket not found.", reply_markup=get_start_keyboard())
+        await update.message.reply_text("Ticket not found.")
         return ConversationHandler.END
     
     # Save reply
@@ -289,8 +280,8 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     db_session.add(reply)
-    ticket.status = 'open'  # Reopen ticket when user replies
-    ticket.updated_at = datetime.utcnow()
+    # using string 'open' instead of TicketStatus.OPEN
+    ticket.status = 'open'  # Changed from TicketStatus.OPEN
     db_session.commit()
     
     await update.message.reply_text(
@@ -303,7 +294,7 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_message(
             chat_id=context.bot_data.get('admin_group_id'),
-            text=f"📝 **User replied to ticket #{ticket_number}**\n\nReply: {reply_text}"
+            text=f"📝 User replied to ticket #{ticket_number}\n\nReply: {reply_text}"
         )
     except Exception as e:
         logger.error(f"Failed to notify admin group: {e}")
@@ -334,9 +325,9 @@ ticket_conv_handler = ConversationHandler(
     per_chat=True
 )
 
-# Conversation handler for user replies
+# Conversation handler for replies
 reply_conv_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(handle_callback, pattern="^user_reply_")],
+    entry_points=[CallbackQueryHandler(handle_callback, pattern="^reply_")],
     states={
         ENTERING_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reply)],
     },
