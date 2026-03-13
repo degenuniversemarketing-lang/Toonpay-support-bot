@@ -17,11 +17,12 @@ def is_admin_group(chat_id: int) -> bool:
 
 async def admin_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all admin commands"""
+    # Check if this is the admin group
     if not is_admin_group(update.effective_chat.id):
         return
     
     command = update.message.text.split()[0].lower()
-    logger.info(f"Admin command received: {command}")
+    logger.info(f"Admin command received: {command} in chat {update.effective_chat.id}")
     
     if command == "/admin":
         await show_admin_panel(update, context)
@@ -86,7 +87,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show pending tickets - KEEPING YOUR WORKING VERSION"""
+    """Show pending tickets - YOUR WORKING VERSION"""
     try:
         tickets = db_session.query(Ticket).filter(
             Ticket.status.in_(['open', 'in_progress'])
@@ -109,7 +110,6 @@ async def show_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Question: {ticket.question[:100]}...\n"
             )
             
-            # YOUR WORKING REPLY BUTTON FORMAT
             keyboard = [[
                 InlineKeyboardButton(
                     f"📝 Reply to #{ticket.ticket_number}", 
@@ -149,9 +149,6 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Searching for: {search_term}")
     
     try:
-        # Remove @ if present
-        clean_term = search_term.replace('@', '')
-        
         # Search by ticket number
         ticket = db_session.query(Ticket).filter_by(ticket_number=search_term).first()
         if ticket:
@@ -166,25 +163,13 @@ async def search_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"**Created:** {ticket.created_at.strftime('%Y-%m-%d %H:%M')}\n"
                 f"**Question:** {ticket.question}"
             )
-            
-            # Add reply button
-            keyboard = [[
-                InlineKeyboardButton(
-                    f"📝 Reply to #{ticket.ticket_number}",
-                    callback_data=f"reply_{ticket.ticket_number}"
-                )
-            ]]
-            
-            await update.message.reply_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
+            await update.message.reply_text(text, parse_mode='Markdown')
             return
         
         # Search by username
+        clean_username = search_term.replace('@', '')
         user = db_session.query(User).filter(
-            User.username.ilike(f"%{clean_term}%")
+            User.username.ilike(f"%{clean_username}%")
         ).first()
         
         if user:
@@ -271,7 +256,13 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
         elif data == "admin_search":
             await query.edit_message_text(
-                "Use /search command with your search term."
+                "🔍 **Search Help**\n\n"
+                "Use /search command with your search term.\n\n"
+                "Examples:\n"
+                "/search TKT-20240313\n"
+                "/search @username\n"
+                "/search 123456789",
+                parse_mode='Markdown'
             )
         
         elif data == "admin_download":
@@ -280,7 +271,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
         elif data.startswith("reply_"):
             ticket_number = data.replace("reply_", "")
-            context.user_data['replying_to_ticket'] = ticket_number
+            context.user_data['replying_to'] = ticket_number
             await query.edit_message_text(
                 f"Please type your reply for ticket #{ticket_number}:"
             )
@@ -294,6 +285,15 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await query.edit_message_text(
                     f"✅ Ticket #{ticket_number} marked as in progress by @{update.effective_user.username}"
                 )
+                
+                # Notify user
+                try:
+                    await context.bot.send_message(
+                        chat_id=ticket.user_id,
+                        text=f"🟡 Your ticket #{ticket_number} is now being reviewed by our support team."
+                    )
+                except:
+                    pass
         
         elif data.startswith("view_"):
             ticket_number = data.replace("view_", "")
@@ -326,11 +326,12 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_admin_group(update.effective_chat.id):
         return
     
-    ticket_number = context.user_data.get('replying_to_ticket')
+    ticket_number = context.user_data.get('replying_to')
     if not ticket_number:
         return
     
     reply_text = update.message.text
+    logger.info(f"Admin reply to ticket {ticket_number}: {reply_text[:50]}...")
     
     try:
         ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
@@ -349,6 +350,7 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         db_session.add(reply)
         ticket.status = 'closed'
+        ticket.updated_at = datetime.utcnow()
         db_session.commit()
         
         # Send to user
@@ -365,10 +367,11 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             
             await update.message.reply_text(f"✅ Reply sent to user. Ticket #{ticket_number} closed.")
-        except:
+        except Exception as e:
+            logger.error(f"Failed to send reply to user: {e}")
             await update.message.reply_text(f"✅ Reply saved but couldn't notify user.")
         
-        context.user_data.pop('replying_to_ticket', None)
+        context.user_data.pop('replying_to', None)
         
     except Exception as e:
         logger.error(f"Error in admin_reply_handler: {e}")
@@ -390,7 +393,7 @@ async def send_ticket_to_admin_group(context, ticket, user, question):
             f"Time: {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}"
         )
         
-        # YOUR WORKING BUTTON FORMAT
+        # Using the SAME reply button format that works in /pending
         keyboard = [[
             InlineKeyboardButton(
                 f"📝 Reply to #{ticket.ticket_number}", 
