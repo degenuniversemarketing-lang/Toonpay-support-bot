@@ -53,13 +53,18 @@ class ToonPaySupportBot:
         logger.info(f"Type of ADMIN_GROUP_ID: {type(Config.ADMIN_GROUP_ID)}")
         
         # ==================== USER HANDLERS (Private Chat Only) ====================
+        # Start command
         self.application.add_handler(
             CommandHandler("start", user.start, filters=filters.ChatType.PRIVATE)
         )
+        
+        # User conversation handlers for ticket creation
         self.application.add_handler(user.ticket_conv_handler)
         self.application.add_handler(user.reply_conv_handler)
+        
+        # User callback handler (for buttons in private chat)
         self.application.add_handler(
-            CallbackQueryHandler(user.handle_callback, pattern="^(?!admin_|reply_|progress_).*")
+            CallbackQueryHandler(user.handle_callback, pattern="^(?!admin_|reply_|progress_|close_|viewuser_).*")
         )
         
         # ==================== GROUP HANDLERS ====================
@@ -77,10 +82,29 @@ class ToonPaySupportBot:
             )
         )
         
+        # Admin callback handler for buttons (Reply, In Progress, View User, Close)
+        self.application.add_handler(
+            CallbackQueryHandler(
+                admin.admin_callback_handler,
+                pattern="^(reply_|progress_|close_|viewuser_)"
+            )
+        )
+        
+        # Admin reply handler for text messages (when admin clicks Reply button)
+        self.application.add_handler(
+            MessageHandler(
+                filters.Chat(Config.ADMIN_GROUP_ID) & filters.TEXT & ~filters.COMMAND,
+                admin.admin_reply_handler
+            )
+        )
+        
         # ==================== SUPER ADMIN HANDLERS (Private Chat Only) ====================
+        # Super admin panel
         self.application.add_handler(
             CommandHandler("super", super_admin.super_admin_panel, filters=filters.ChatType.PRIVATE)
         )
+        
+        # Group management
         self.application.add_handler(
             CommandHandler("addgroup", super_admin.add_group, filters=filters.ChatType.PRIVATE)
         )
@@ -90,6 +114,8 @@ class ToonPaySupportBot:
         self.application.add_handler(
             CommandHandler("listgroups", super_admin.list_groups, filters=filters.ChatType.PRIVATE)
         )
+        
+        # Bot management
         self.application.add_handler(
             CommandHandler("broadcast", super_admin.broadcast, filters=filters.ChatType.PRIVATE)
         )
@@ -115,11 +141,17 @@ class ToonPaySupportBot:
         # Don't try to reply if update doesn't have message
         if update and update.effective_message:
             try:
-                await update.effective_message.reply_text(
-                    f"⚠️ An error occurred. The admin has been notified."
-                )
-            except:
-                pass
+                error_message = str(context.error)
+                if "NoneType" in error_message and "len()" in error_message:
+                    await update.effective_message.reply_text(
+                        "⚠️ There was an error processing your request. Please try again."
+                    )
+                else:
+                    await update.effective_message.reply_text(
+                        f"⚠️ An error occurred. The admin has been notified."
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send error message: {e}")
         
         # Notify super admins
         for admin_id in Config.SUPER_ADMIN_IDS:
@@ -128,8 +160,8 @@ class ToonPaySupportBot:
                     chat_id=admin_id,
                     text=f"⚠️ Bot Error:\n{context.error}"
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to notify super admin {admin_id}: {e}")
     
     async def _post_init(self, application):
         """Setup after bot initialization"""
@@ -139,7 +171,11 @@ class ToonPaySupportBot:
             BotCommand("support", "Get support (in groups)"),
         ]
         
-        await application.bot.set_my_commands(commands)
+        try:
+            await application.bot.set_my_commands(commands)
+            logger.info("Bot commands set successfully")
+        except Exception as e:
+            logger.error(f"Failed to set bot commands: {e}")
         
         # Store admin group ID in bot data
         application.bot_data['admin_group_id'] = Config.ADMIN_GROUP_ID
