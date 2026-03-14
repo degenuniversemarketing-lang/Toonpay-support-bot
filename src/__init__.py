@@ -1,2 +1,1 @@
-# ToonPay Support Bot Package
-__version__ = "1.0.0"
+# Empty file to make src a package
