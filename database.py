@@ -34,7 +34,7 @@ class Database:
         except Exception as e:
             logger.error(f"Error creating users table: {e}")
         
-        # Admin groups table
+        # Admin groups table (legacy - for backward compatibility)
         try:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admin_groups (
@@ -46,6 +46,19 @@ class Database:
             logger.info("Admin groups table created/verified")
         except Exception as e:
             logger.error(f"Error creating admin_groups table: {e}")
+        
+        # Activated groups table (for /support command)
+        try:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS activated_groups (
+                    group_id BIGINT PRIMARY KEY,
+                    activated_by BIGINT,
+                    activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            logger.info("Activated groups table created/verified")
+        except Exception as e:
+            logger.error(f"Error creating activated_groups table: {e}")
         
         # Tickets table - without foreign key first
         try:
@@ -131,6 +144,17 @@ class Database:
             logger.error(f"Error updating user contact: {e}")
             self.conn.rollback()
     
+    def get_user(self, user_id):
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+            user = cursor.fetchone()
+            cursor.close()
+            return user
+        except Exception as e:
+            logger.error(f"Error getting user: {e}")
+            return None
+    
     # Ticket methods
     def create_ticket(self, user_id, question):
         try:
@@ -180,6 +204,22 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting user tickets: {e}")
             return []
+    
+    def get_ticket(self, ticket_id):
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('''
+                SELECT t.*, u.username, u.first_name, u.last_name, u.email, u.phone
+                FROM tickets t
+                LEFT JOIN users u ON t.user_id = u.user_id
+                WHERE t.ticket_id = %s
+            ''', (ticket_id,))
+            ticket = cursor.fetchone()
+            cursor.close()
+            return ticket
+        except Exception as e:
+            logger.error(f"Error getting ticket: {e}")
+            return None
     
     def reply_to_ticket(self, ticket_id, admin_answer, admin_id, admin_username):
         try:
@@ -254,7 +294,7 @@ class Database:
             self.conn.rollback()
             return False
     
-    # Admin group methods
+    # Admin group methods (legacy)
     def add_admin_group(self, group_id, added_by):
         try:
             cursor = self.conn.cursor()
@@ -293,6 +333,61 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting admin groups: {e}")
             return []
+    
+    # Activated groups methods (for /support command)
+    def activate_group(self, group_id, activated_by):
+        """Activate a group for /support command"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO activated_groups (group_id, activated_by)
+                VALUES (%s, %s)
+                ON CONFLICT (group_id) DO NOTHING
+            ''', (group_id, activated_by))
+            self.conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error activating group: {e}")
+            self.conn.rollback()
+            return False
+
+    def deactivate_group(self, group_id):
+        """Deactivate a group"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM activated_groups WHERE group_id = %s', (group_id,))
+            self.conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error deactivating group: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_activated_groups(self):
+        """Get all activated groups"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT group_id FROM activated_groups')
+            groups = [row[0] for row in cursor.fetchall()]
+            cursor.close()
+            return groups
+        except Exception as e:
+            logger.error(f"Error getting activated groups: {e}")
+            return []
+
+    def is_group_activated(self, group_id):
+        """Check if a group is activated"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT 1 FROM activated_groups WHERE group_id = %s', (group_id,))
+            result = cursor.fetchone()
+            cursor.close()
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error checking group activation: {e}")
+            return False
     
     # Statistics
     def get_stats(self):
@@ -435,6 +530,22 @@ class Database:
             logger.error(f"Error exporting by status: {e}")
             return []
     
+    # Ticket logs
+    def get_ticket_logs(self, ticket_id):
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('''
+                SELECT * FROM ticket_logs 
+                WHERE ticket_id = %s 
+                ORDER BY timestamp DESC
+            ''', (ticket_id,))
+            logs = cursor.fetchall()
+            cursor.close()
+            return logs
+        except Exception as e:
+            logger.error(f"Error getting ticket logs: {e}")
+            return []
+    
     # Delete old data
     def delete_old_data(self, days):
         try:
@@ -451,48 +562,3 @@ class Database:
             logger.error(f"Error deleting old data: {e}")
             self.conn.rollback()
             return 0
-    
-    # Get ticket by ID
-    def get_ticket(self, ticket_id):
-        try:
-            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute('''
-                SELECT t.*, u.username, u.first_name, u.last_name, u.email, u.phone
-                FROM tickets t
-                LEFT JOIN users u ON t.user_id = u.user_id
-                WHERE t.ticket_id = %s
-            ''', (ticket_id,))
-            ticket = cursor.fetchone()
-            cursor.close()
-            return ticket
-        except Exception as e:
-            logger.error(f"Error getting ticket: {e}")
-            return None
-    
-    # Get user by ID
-    def get_user(self, user_id):
-        try:
-            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
-            user = cursor.fetchone()
-            cursor.close()
-            return user
-        except Exception as e:
-            logger.error(f"Error getting user: {e}")
-            return None
-    
-    # Get ticket logs
-    def get_ticket_logs(self, ticket_id):
-        try:
-            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute('''
-                SELECT * FROM ticket_logs 
-                WHERE ticket_id = %s 
-                ORDER BY timestamp DESC
-            ''', (ticket_id,))
-            logs = cursor.fetchall()
-            cursor.close()
-            return logs
-        except Exception as e:
-            logger.error(f"Error getting ticket logs: {e}")
-            return []
