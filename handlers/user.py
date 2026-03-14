@@ -8,7 +8,7 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
-# States - Export these variables
+# States
 CATEGORY, NAME, EMAIL, PHONE, QUESTION = range(5)
 
 # Ticket categories
@@ -380,6 +380,46 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
             
             context.user_data.clear()
             return ConversationHandler.END
+    
+    # NEW: Custom command handler for user commands
+    async def custom_command_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle custom commands added by super admin"""
+        command = update.message.text.split()[0][1:].lower()  # Remove / and get command
+        
+        # Skip built-in commands
+        built_in = ['start', 'new', 'cancel', 'support', 'pending', 'stats', 
+                   'search', 'download', 'download_solved', 'download_pending',
+                   'activate', 'deactivate', 'listactivated', 'deletedata',
+                   'addfilter', 'removefilter', 'listfilters', 'broadcast', 'allstats']
+        
+        if command in built_in:
+            return False  # Let built-in handlers process it
+        
+        # Get custom command from database
+        cmd_data = self.db.get_custom_command(command)
+        
+        if cmd_data:
+            content = cmd_data['content']
+            # Check if content is a link (starts with http)
+            if content.startswith(('http://', 'https://', 't.me/', 'www.')):
+                # Add http if missing
+                if content.startswith('t.me/'):
+                    content = 'https://' + content
+                elif content.startswith('www.'):
+                    content = 'https://' + content
+                
+                # Send as button
+                keyboard = [[InlineKeyboardButton("🔗 Click Here", url=content)]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    f"Here's your requested link:",
+                    reply_markup=reply_markup
+                )
+            else:
+                # Send as text
+                await update.message.reply_text(content)
+            return True
+        return False
     
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel the conversation"""
