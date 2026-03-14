@@ -1,3 +1,1 @@
-from . import auth
-
-__all__ = ['auth']
+# Empty file to make middlewares a package
