@@ -3,56 +3,54 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from src.database import Base
 
-# Remove the ENUM - use String instead
-class Ticket(Base):
-    __tablename__ = 'tickets'
-    
-    id = Column(Integer, primary_key=True)
-    ticket_number = Column(String(50), unique=True, nullable=False)
-    user_id = Column(BigInteger, ForeignKey('users.user_id'))
-    category = Column(String(50))
-    question = Column(Text)
-    status = Column(String(20), default='open')  # Changed from ENUM to String
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    user = relationship("User", back_populates="tickets")
-    replies = relationship("TicketReply", back_populates="ticket", cascade="all, delete-orphan")
-
 class User(Base):
     __tablename__ = 'users'
     
     id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, unique=True, nullable=False)
-    username = Column(String(255))
-    first_name = Column(String(255))
-    last_name = Column(String(255))
-    name = Column(String(255))  # User provided name
-    email = Column(String(255))
-    phone = Column(String(50))
+    username = Column(String(255), nullable=True)
+    first_name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    last_active = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    tickets = relationship("Ticket", back_populates="user", cascade="all, delete-orphan")
+    tickets = relationship('Ticket', back_populates='user', cascade='all, delete-orphan')
 
-class TicketReply(Base):
-    __tablename__ = 'ticket_replies'
+class Ticket(Base):
+    __tablename__ = 'tickets'
     
     id = Column(Integer, primary_key=True)
-    ticket_id = Column(Integer, ForeignKey('tickets.id'))
-    admin_id = Column(BigInteger)
-    admin_username = Column(String(255))
-    message = Column(Text)
+    ticket_number = Column(String(50), unique=True, nullable=False)
+    user_id = Column(BigInteger, ForeignKey('users.user_id'), nullable=False)
+    category = Column(String(50), nullable=False)
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=False)
+    question = Column(Text, nullable=False)
+    status = Column(String(50), default='new')
+    admin_reply = Column(Text, nullable=True)
+    admin_username = Column(String(255), nullable=True)
+    replied_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    ticket = relationship("Ticket", back_populates="replies")
+    user = relationship('User', back_populates='tickets')
 
-class AllowedGroup(Base):
-    __tablename__ = 'allowed_groups'
+class Group(Base):
+    __tablename__ = 'groups'
     
     id = Column(Integer, primary_key=True)
     group_id = Column(BigInteger, unique=True, nullable=False)
-    group_title = Column(String(255))
-    added_by = Column(BigInteger)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    group_title = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
+    added_by = Column(BigInteger, nullable=False)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+class AdminAction(Base):
+    __tablename__ = 'admin_actions'
+    
+    id = Column(Integer, primary_key=True)
+    admin_id = Column(BigInteger, nullable=False)
+    admin_username = Column(String(255), nullable=True)
+    action = Column(String(50), nullable=False)
+    ticket_number = Column(String(50), nullable=True)
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
