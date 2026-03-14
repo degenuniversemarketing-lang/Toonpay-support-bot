@@ -1,5 +1,6 @@
 import pandas as pd
 import io
+import csv
 from datetime import datetime, timedelta
 
 def create_excel_sheet(tickets):
@@ -56,6 +57,97 @@ def create_excel_sheet(tickets):
     
     output.seek(0)
     return output
+
+def create_csv_file(tickets):
+    """Create CSV file with all tickets - One sheet with all data"""
+    output = io.StringIO()
+    
+    # Define CSV headers exactly as requested
+    headers = [
+        'Name', 
+        'Username', 
+        'User ID', 
+        'Ticket ID', 
+        'Email', 
+        'Phone', 
+        'User Question', 
+        'Admin Answer', 
+        'Ticket Status', 
+        'Date & Time', 
+        'Replied By Admin'
+    ]
+    
+    writer = csv.DictWriter(output, fieldnames=headers)
+    writer.writeheader()
+    
+    if tickets:
+        for ticket in tickets:
+            # Map ticket fields to CSV columns with proper formatting
+            row = {
+                'Name': ticket.get('name', ''),
+                'Username': ticket.get('username', ''),
+                'User ID': str(ticket.get('user_id', '')),
+                'Ticket ID': str(ticket.get('ticket_id', '')),
+                'Email': ticket.get('email', ''),
+                'Phone': ticket.get('phone', ''),
+                'User Question': ticket.get('user_question', '').replace('\n', ' ').replace('\r', ' '),
+                'Admin Answer': ticket.get('admin_answer', 'No reply yet').replace('\n', ' ').replace('\r', ' '),
+                'Ticket Status': ticket.get('ticket_status', ''),
+                'Date & Time': str(ticket.get('date_time', '')),
+                'Replied By Admin': ticket.get('replied_by_admin', '')
+            }
+            writer.writerow(row)
+    else:
+        # Write headers only if no tickets
+        writer.writeheader()
+    
+    output.seek(0)
+    return io.BytesIO(output.getvalue().encode('utf-8-sig'))  # Use utf-8-sig for Excel compatibility
+
+def create_csv_by_status(tickets, status_filter=None):
+    """Create CSV file filtered by status"""
+    output = io.StringIO()
+    
+    headers = [
+        'Name', 
+        'Username', 
+        'User ID', 
+        'Ticket ID', 
+        'Email', 
+        'Phone', 
+        'User Question', 
+        'Admin Answer', 
+        'Ticket Status', 
+        'Date & Time', 
+        'Replied By Admin'
+    ]
+    
+    writer = csv.DictWriter(output, fieldnames=headers)
+    writer.writeheader()
+    
+    if tickets:
+        for ticket in tickets:
+            # Apply status filter if specified
+            if status_filter and ticket.get('ticket_status') not in status_filter:
+                continue
+                
+            row = {
+                'Name': ticket.get('name', ''),
+                'Username': ticket.get('username', ''),
+                'User ID': str(ticket.get('user_id', '')),
+                'Ticket ID': str(ticket.get('ticket_id', '')),
+                'Email': ticket.get('email', ''),
+                'Phone': ticket.get('phone', ''),
+                'User Question': ticket.get('user_question', '').replace('\n', ' ').replace('\r', ' '),
+                'Admin Answer': ticket.get('admin_answer', 'No reply yet').replace('\n', ' ').replace('\r', ' '),
+                'Ticket Status': ticket.get('ticket_status', ''),
+                'Date & Time': str(ticket.get('date_time', '')),
+                'Replied By Admin': ticket.get('replied_by_admin', '')
+            }
+            writer.writerow(row)
+    
+    output.seek(0)
+    return io.BytesIO(output.getvalue().encode('utf-8-sig'))
 
 def parse_time_string(time_str):
     """Parse time string like '1 day', '2 hours', '30 minutes'"""
