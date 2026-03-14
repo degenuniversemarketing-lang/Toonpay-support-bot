@@ -1,7 +1,7 @@
 import random
 import string
 from datetime import datetime
-from src.models import Ticket, User
+from src.models import Ticket, User, AdminAction
 from src.database import db_session
 import pandas as pd
 import io
@@ -21,13 +21,13 @@ def generate_ticket_number():
 
 def log_admin_action(admin_id, admin_username, action, ticket_number=None, details=None):
     """Log admin actions to database"""
-    from src.models import AdminAction
     action_log = AdminAction(
         admin_id=admin_id,
         admin_username=admin_username,
         action=action,
         ticket_number=ticket_number,
-        details=details
+        details=details,
+        created_at=datetime.utcnow()
     )
     db_session.add(action_log)
     db_session.commit()
@@ -49,8 +49,8 @@ def format_ticket_details(ticket, user):
         f"**Username:** @{user.username if user and user.username else 'N/A'}\n"
         f"**User ID:** `{ticket.user_id}`\n"
         f"**Category:** {ticket.category}\n"
-        f"**Email:** {ticket.email}\n"
-        f"**Phone:** {ticket.phone}\n\n"
+        f"**Email:** `{ticket.email}`\n"
+        f"**Phone:** `{ticket.phone}`\n\n"
         f"**Question:**\n{ticket.question}\n"
     )
     
