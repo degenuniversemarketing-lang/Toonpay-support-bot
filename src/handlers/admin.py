@@ -6,8 +6,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.models import User, Ticket, AdminAction
 from src.database import db_session
-from src.keyboards.admin_keyboards import *
-from src.utils.helpers import format_ticket_details, export_data_to_excel
+from src.keyboards.admin_keyboards import get_admin_ticket_keyboard, get_pending_ticket_keyboard
+from src.utils.helpers import format_ticket_details, log_admin_action
 from src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ async def pending_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Add reply button for pending tickets
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📝 Reply", callback_data=f"pending_reply_{ticket.ticket_number}")
+            InlineKeyboardButton("📝 Reply to this ticket", callback_data=f"pending_reply_{ticket.ticket_number}")
         ]])
         
         await update.message.reply_text(
@@ -176,15 +176,13 @@ async def reply_to_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_session.commit()
     
     # Log action
-    log_action = AdminAction(
-        admin_id=admin.id,
-        admin_username=admin.username,
-        action='reply',
-        ticket_number=ticket_number,
-        details=f'Replied: {reply_text[:50]}...'
+    log_admin_action(
+        admin.id,
+        admin.username,
+        'reply',
+        ticket_number,
+        f'Replied: {reply_text[:50]}...'
     )
-    db_session.add(log_action)
-    db_session.commit()
     
     # Send reply to user
     try:
@@ -205,3 +203,199 @@ async def reply_to_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await update.message.reply_text(f"❌ Error sending reply: {str(e)}")
+
+async def handle_admin_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin reply button click from new ticket notification"""
+    query = update.callback_query
+    await query.answer()
+    
+    ticket_number = query.data.replace('reply_', '')
+    context.user_data['replying_to'] = ticket_number
+    context.user_data['reply_source'] = 'new_ticket'
+    
+    # Delete the original message with buttons
+    await query.delete_message()
+    
+    # Send a new message asking for reply
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=f"📝 Please type your reply for ticket `{ticket_number}`\n\n"
+             f"Your reply will be sent to the user and the ticket will be closed.\n"
+             f"Type /cancel to cancel.",
+        parse_mode='Markdown'
+    )
+
+async def handle_admin_in_progress_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin in progress button click"""
+    query = update.callback_query
+    await query.answer()
+    
+    ticket_number = query.data.replace('progress_', '')
+    admin = query.from_user
+    
+    ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+    if ticket:
+        ticket.status = 'in_progress'
+        db_session.commit()
+        
+        # Log action
+        log_admin_action(
+            admin.id,
+            admin.username,
+            'mark_in_progress',
+            ticket_number
+        )
+        
+        # Update the message to show it's in progress
+        await query.edit_message_text(
+            text=query.message.text + f"\n\n⏳ **Marked as in progress by @{admin.username}**",
+            parse_mode='Markdown'
+        )
+        
+        # Send confirmation
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"✅ Ticket {ticket_number} marked as in progress by @{admin.username}"
+        )
+
+async def handle_admin_view_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin view button click"""
+    query = update.callback_query
+    await query.answer()
+    
+    ticket_number = query.data.replace('view_', '')
+    
+    ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+    if ticket:
+        user = db_session.query(User).filter_by(user_id=ticket.user_id).first()
+        ticket_text = format_ticket_details(ticket, user)
+        
+        # Send as new message instead of editing
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=ticket_text,
+            parse_mode='Markdown'
+        )
+
+async def handle_admin_cancel_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin cancel button click"""
+    query = update.callback_query
+    await query.answer()
+    
+    ticket_number = query.data.replace('cancel_', '')
+    admin = query.from_user
+    
+    ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+    if ticket:
+        ticket.status = 'closed'
+        db_session.commit()
+        
+        # Log action
+        log_admin_action(
+            admin.id,
+            admin.username,
+            'cancel_ticket',
+            ticket_number
+        )
+        
+        # Update the message
+        await query.edit_message_text(
+            text=query.message.text + f"\n\n❌ **Cancelled by @{admin.username}**",
+            parse_mode='Markdown'
+        )
+        
+        # Send confirmation
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"❌ Ticket {ticket_number} has been cancelled by @{admin.username}"
+        )
+
+async def handle_pending_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle reply button from pending tickets list"""
+    query = update.callback_query
+    await query.answer()
+    
+    ticket_number = query.data.replace('pending_reply_', '')
+    context.user_data['replying_to'] = ticket_number
+    context.user_data['reply_source'] = 'pending'
+    
+    # Delete the original message
+    await query.delete_message()
+    
+    # Send a new message asking for reply
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=f"📝 Please type your reply for ticket `{ticket_number}`\n\n"
+             f"Your reply will be sent to the user and the ticket will be closed.\n"
+             f"Type /cancel to cancel.",
+        parse_mode='Markdown'
+    )
+
+async def handle_admin_reply_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle admin reply message after clicking any reply button"""
+    if 'replying_to' not in context.user_data:
+        return
+    
+    ticket_number = context.user_data['replying_to']
+    reply_text = update.message.text
+    admin = update.effective_user
+    
+    # Check if user wants to cancel
+    if reply_text.lower() == '/cancel':
+        await update.message.reply_text("❌ Reply cancelled.")
+        del context.user_data['replying_to']
+        del context.user_data['reply_source']
+        return
+    
+    ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
+    if not ticket:
+        await update.message.reply_text("❌ Ticket not found!")
+        del context.user_data['replying_to']
+        del context.user_data['reply_source']
+        return
+    
+    # Update ticket
+    ticket.status = 'closed'
+    ticket.admin_reply = reply_text
+    ticket.admin_username = admin.username or admin.full_name
+    ticket.replied_at = datetime.utcnow()
+    db_session.commit()
+    
+    # Log action
+    log_admin_action(
+        admin.id,
+        admin.username,
+        'reply',
+        ticket_number,
+        f'Replied: {reply_text[:50]}...'
+    )
+    
+    # Send reply to user
+    try:
+        user_message = (
+            f"📬 **Reply to your ticket #{ticket_number}**\n\n"
+            f"**Your question:**\n{ticket.question}\n\n"
+            f"**Support Team Reply:**\n{reply_text}\n\n"
+            f"✅ This ticket is now closed. If you have another question, please create a new ticket."
+        )
+        
+        await context.bot.send_message(
+            chat_id=ticket.user_id,
+            text=user_message,
+            parse_mode='Markdown'
+        )
+        
+        # Also notify the user about the reply in the group where admin replied
+        await update.message.reply_text(
+            f"✅ Reply sent to user for ticket {ticket_number}\n\n"
+            f"**Your reply:**\n{reply_text}",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error sending reply: {str(e)}")
+    
+    # Clear user data
+    del context.user_data['replying_to']
+    if 'reply_source' in context.user_data:
+        del context.user_data['reply_source']
