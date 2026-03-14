@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import Database
 import logging
@@ -11,6 +11,10 @@ class CustomCommandHandler:
     
     async def handle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle custom commands"""
+        # Only work in private chat
+        if update.effective_chat.type != 'private':
+            return
+        
         command = update.message.text.split()[0][1:].lower()
         
         # Skip built-in commands
@@ -30,8 +34,6 @@ class CustomCommandHandler:
             
             # Check if content is a link
             if content.startswith(('http://', 'https://', 't.me/', 'www.')):
-                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                
                 # Add protocol if missing
                 if content.startswith('t.me/'):
                     content = 'https://' + content
@@ -47,7 +49,5 @@ class CustomCommandHandler:
             else:
                 await update.message.reply_text(content)
             
+            logger.info(f"Custom command /{command} executed by user {update.effective_user.id}")
             return True
-        
-        # If not found, optionally send error
-        # await update.message.reply_text("❌ Unknown command.")
