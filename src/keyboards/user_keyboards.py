@@ -21,11 +21,3 @@ def get_categories_keyboard():
         keyboard.append([InlineKeyboardButton(f"📌 {category}", callback_data=f"cat_{category.lower()}")])
     
     return InlineKeyboardMarkup(keyboard)
-
-def get_ticket_submit_keyboard():
-    """Ticket submission confirmation keyboard"""
-    keyboard = [
-        [InlineKeyboardButton("✅ Submit Ticket", callback_data="submit_ticket")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
