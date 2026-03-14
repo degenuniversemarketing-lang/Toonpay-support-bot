@@ -98,7 +98,6 @@ async def search_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     search_term = ' '.join(context.args)
-    
     results = []
     
     # Search by ticket number
@@ -113,7 +112,7 @@ async def search_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tickets = db_session.query(Ticket).filter_by(user_id=user_id).all()
             results.extend(tickets)
         
-        # Search by username or name
+        # Search by username
         if search_term.startswith('@'):
             username = search_term[1:]
             users = db_session.query(User).filter(User.username.ilike(f'%{username}%')).all()
@@ -121,7 +120,7 @@ async def search_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_tickets = db_session.query(Ticket).filter_by(user_id=user.user_id).all()
                 results.extend(user_tickets)
         else:
-            # Search by name or email
+            # Search by name, email, or phone
             tickets = db_session.query(Ticket).filter(
                 (Ticket.name.ilike(f'%{search_term}%')) |
                 (Ticket.email.ilike(f'%{search_term}%')) |
@@ -344,14 +343,16 @@ async def handle_admin_reply_message(update: Update, context: ContextTypes.DEFAU
     if reply_text.lower() == '/cancel':
         await update.message.reply_text("❌ Reply cancelled.")
         del context.user_data['replying_to']
-        del context.user_data['reply_source']
+        if 'reply_source' in context.user_data:
+            del context.user_data['reply_source']
         return
     
     ticket = db_session.query(Ticket).filter_by(ticket_number=ticket_number).first()
     if not ticket:
         await update.message.reply_text("❌ Ticket not found!")
         del context.user_data['replying_to']
-        del context.user_data['reply_source']
+        if 'reply_source' in context.user_data:
+            del context.user_data['reply_source']
         return
     
     # Update ticket
@@ -385,7 +386,7 @@ async def handle_admin_reply_message(update: Update, context: ContextTypes.DEFAU
             parse_mode='Markdown'
         )
         
-        # Also notify the user about the reply in the group where admin replied
+        # Also notify the admin
         await update.message.reply_text(
             f"✅ Reply sent to user for ticket {ticket_number}\n\n"
             f"**Your reply:**\n{reply_text}",
