@@ -3,7 +3,6 @@ import sys
 import os
 import traceback
 from pathlib import Path
-import asyncio  # Added for async handling
 
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
@@ -62,8 +61,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Failed to send error to super admin: {e}")
 
-async def test_admin_group_connection(application):
-    """Test connection to admin group (separate async function)"""
+async def post_init(application: Application) -> None:
+    """Run after bot initialization"""
+    # Test admin group connection
     try:
         await application.bot.send_message(
             chat_id=Config.ADMIN_GROUP_ID,
@@ -71,7 +71,6 @@ async def test_admin_group_connection(application):
             parse_mode='Markdown'
         )
         logger.info(f"Successfully connected to admin group: {Config.ADMIN_GROUP_ID}")
-        return True
     except Exception as e:
         logger.error(f"Failed to send message to admin group: {e}")
         # Notify super admin
@@ -83,10 +82,9 @@ async def test_admin_group_connection(application):
             )
         except Exception as e2:
             logger.error(f"Failed to notify super admin: {e2}")
-        return False
 
-async def main_async():
-    """Async main function"""
+def main():
+    """Start the bot."""
     try:
         # Initialize database
         logger.info("Initializing database...")
@@ -100,7 +98,7 @@ async def main_async():
         
         # Create application
         logger.info("Creating bot application...")
-        application = Application.builder().token(Config.BOT_TOKEN).build()
+        application = Application.builder().token(Config.BOT_TOKEN).post_init(post_init).build()
         
         # Store db in bot_data
         application.bot_data['db'] = db
@@ -124,7 +122,7 @@ async def main_async():
                 CommandHandler('cancel', user_handlers.cancel),
                 CallbackQueryHandler(user_handlers.button_handler, pattern='^cancel$')
             ],
-            per_message=True,
+            per_message=False,  # Changed back to False to avoid warning with multiple handler types
             name="ticket_conversation"
         )
         
@@ -156,12 +154,9 @@ async def main_async():
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
         
-        # Test admin group connection (now in async function)
-        await test_admin_group_connection(application)
-        
-        # Start bot
+        # Start bot (this handles the event loop properly)
         logger.info("Bot started successfully!")
-        await application.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
         logger.error(f"Fatal error starting bot: {e}")
@@ -180,10 +175,6 @@ async def main_async():
         except:
             pass
         raise
-
-def main():
-    """Entry point - runs the async main function"""
-    asyncio.run(main_async())
 
 if __name__ == '__main__':
     main()
