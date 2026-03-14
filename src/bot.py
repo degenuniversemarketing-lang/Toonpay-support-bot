@@ -24,9 +24,6 @@ def main():
     # Create application
     application = ApplicationBuilder().token(Config.BOT_TOKEN).build()
     
-    # Add middleware
-    application.add_handler(AuthMiddleware())
-    
     # User handlers (private chat only)
     application.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.PRIVATE))
     
@@ -47,8 +44,10 @@ def main():
     
     # Callback query handlers
     application.add_handler(CallbackQueryHandler(handle_category_selection, pattern="^cat_"))
-    application.add_handler(CallbackQueryHandler(handle_ticket_submit, pattern="^submit_ticket$"))
+    application.add_handler(CallbackQueryHandler(start_ticket_creation, pattern="^new_ticket$"))
     application.add_handler(CallbackQueryHandler(handle_support_button, pattern="^support$"))
+    
+    # Admin callback handlers
     application.add_handler(CallbackQueryHandler(handle_admin_reply_button, pattern="^reply_"))
     application.add_handler(CallbackQueryHandler(handle_admin_in_progress_button, pattern="^progress_"))
     application.add_handler(CallbackQueryHandler(handle_admin_view_button, pattern="^view_"))
@@ -70,7 +69,14 @@ def main():
     )
     application.add_handler(conv_handler)
     
+    # Add message handler for admin replies
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.Chat(Config.ADMIN_GROUP_ID), 
+        handle_admin_reply_message
+    ))
+    
     # Start bot
+    logger.info("Bot started successfully!")
     application.run_polling()
 
 if __name__ == '__main__':
