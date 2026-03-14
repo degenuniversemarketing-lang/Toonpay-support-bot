@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 from telegram.error import TelegramError
 from database import Database
-from handlers.user import UserHandlers, CATEGORY, EMAIL, PHONE, QUESTION
+from handlers.user import UserHandlers, CATEGORY, NAME, EMAIL, PHONE, QUESTION
 from handlers.admin import AdminHandlers
 from handlers.group import GroupHandlers
 from handlers.super_admin import SuperAdminHandlers
@@ -114,6 +114,7 @@ def main():
             ],
             states={
                 CATEGORY: [CallbackQueryHandler(user_handlers.category_selected, pattern='^cat_')],
+                NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, user_handlers.get_name)],
                 EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, user_handlers.get_email)],
                 PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, user_handlers.get_phone)],
                 QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, user_handlers.get_question)],
@@ -122,7 +123,7 @@ def main():
                 CommandHandler('cancel', user_handlers.cancel),
                 CallbackQueryHandler(user_handlers.button_handler, pattern='^cancel$')
             ],
-            per_message=False,  # Changed back to False to avoid warning with multiple handler types
+            per_message=False,
             name="ticket_conversation"
         )
         
@@ -145,16 +146,16 @@ def main():
             admin_handlers.handle_admin_reply
         ))
         
-        # Group support command (works in any group, bot checks if group is activated)
+        # Group support command
         application.add_handler(CommandHandler('support', group_handlers.support))
         
-        # Super admin commands (only for super admin in private)
+        # Super admin commands
         application.add_handler(CommandHandler('activate', super_admin_handlers.activate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deactivate', super_admin_handlers.deactivate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
         
-        # Start bot (this handles the event loop properly)
+        # Start bot
         logger.info("Bot started successfully!")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
         
