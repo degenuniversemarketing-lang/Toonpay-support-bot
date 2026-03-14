@@ -23,6 +23,7 @@ from handlers.user import UserHandlers, CATEGORY, NAME, EMAIL, PHONE, QUESTION
 from handlers.admin import AdminHandlers
 from handlers.group import GroupHandlers
 from handlers.super_admin import SuperAdminHandlers
+from handlers.custom import CustomCommandHandler  # NEW
 from config import Config
 
 # Enable logging
@@ -95,6 +96,7 @@ def main():
         admin_handlers = AdminHandlers(db)
         group_handlers = GroupHandlers()
         super_admin_handlers = SuperAdminHandlers(db)
+        custom_handler = CustomCommandHandler(db)  # NEW
         
         # Create application
         logger.info("Creating bot application...")
@@ -151,11 +153,26 @@ def main():
         # Group support command
         application.add_handler(CommandHandler('support', group_handlers.support))
         
-        # Super admin commands
+        # Super admin commands (NEW - with time-based delete)
         application.add_handler(CommandHandler('activate', super_admin_handlers.activate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deactivate', super_admin_handlers.deactivate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
+        
+        # NEW Super admin custom commands
+        application.add_handler(CommandHandler('addfilter', super_admin_handlers.add_filter, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('removefilter', super_admin_handlers.remove_filter, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('listfilters', super_admin_handlers.list_filters, filters=filters.ChatType.PRIVATE))
+        
+        # NEW Super admin broadcast and stats
+        application.add_handler(CommandHandler('broadcast', super_admin_handlers.broadcast, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('allstats', super_admin_handlers.all_stats, filters=filters.ChatType.PRIVATE))
+        
+        # NEW Custom commands handler (must be last to not interfere with built-in commands)
+        application.add_handler(MessageHandler(
+            filters.COMMAND & filters.ChatType.PRIVATE,
+            custom_handler.handle
+        ), group=999)  # Low priority group
         
         # Start bot
         logger.info("Bot started successfully!")
