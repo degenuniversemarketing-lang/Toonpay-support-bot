@@ -14,7 +14,8 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     ConversationHandler,
-    filters
+    filters,
+    ContextTypes  # This was missing
 )
 from telegram.error import TelegramError
 from database import Database
@@ -67,6 +68,9 @@ def main():
         logger.info("Initializing database...")
         db = Database()
         
+        # Store db in bot_data for access in handlers
+        # application.bot_data['db'] = db  # We'll set this after creating application
+        
         # Initialize handlers
         user_handlers = UserHandlers(db)
         admin_handlers = AdminHandlers(db)
@@ -76,6 +80,9 @@ def main():
         # Create application
         logger.info("Creating bot application...")
         application = Application.builder().token(Config.BOT_TOKEN).build()
+        
+        # Store db in bot_data
+        application.bot_data['db'] = db
         
         # Add error handler
         application.add_error_handler(error_handler)
@@ -139,11 +146,14 @@ def main():
         except Exception as e:
             logger.error(f"Failed to send message to admin group: {e}")
             # Notify super admin
-            application.bot.send_message(
-                chat_id=Config.SUPER_ADMIN_ID,
-                text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.",
-                parse_mode='Markdown'
-            )
+            try:
+                application.bot.send_message(
+                    chat_id=Config.SUPER_ADMIN_ID,
+                    text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.\n\nError: {str(e)}",
+                    parse_mode='Markdown'
+                )
+            except:
+                pass
         
         # Start bot
         logger.info("Bot started successfully!")
@@ -151,16 +161,20 @@ def main():
         
     except Exception as e:
         logger.error(f"Fatal error starting bot: {e}")
+        logger.error(traceback.format_exc())
         # Try to notify super admin via raw request
-        import requests
-        requests.post(
-            f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": Config.SUPER_ADMIN_ID,
-                "text": f"🚨 **FATAL BOT ERROR** 🚨\n\nBot failed to start!\nError: {str(e)}",
-                "parse_mode": "Markdown"
-            }
-        )
+        try:
+            import requests
+            requests.post(
+                f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": Config.SUPER_ADMIN_ID,
+                    "text": f"🚨 **FATAL BOT ERROR** 🚨\n\nBot failed to start!\nError: {str(e)}\n\nTraceback:\n`{traceback.format_exc()[:500]}`",
+                    "parse_mode": "Markdown"
+                }
+            )
+        except:
+            pass
         raise
 
 if __name__ == '__main__':
