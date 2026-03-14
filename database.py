@@ -219,8 +219,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    def update_user_contact(self, user_id, email, phone):
-        """Update user contact information"""
+    def update_user_contact(self, user_id, email, phone, name=None):
+        """Update user contact information with optional name"""
         if not self.conn:
             logger.error("No database connection for update_user_contact")
             return False
@@ -228,12 +228,27 @@ class Database:
         cursor = None
         try:
             cursor = self.conn.cursor()
-            cursor.execute('''
-                UPDATE users 
-                SET email = %s, phone = %s
-                WHERE user_id = %s
-                RETURNING user_id
-            ''', (email, phone, user_id))
+            
+            if name:
+                # Split name into first and last name
+                name_parts = name.split(' ', 1)
+                first_name = name_parts[0]
+                last_name = name_parts[1] if len(name_parts) > 1 else ''
+                
+                cursor.execute('''
+                    UPDATE users 
+                    SET email = %s, phone = %s, first_name = %s, last_name = %s
+                    WHERE user_id = %s
+                    RETURNING user_id
+                ''', (email, phone, first_name, last_name, user_id))
+                logger.info(f"Updated user {user_id} with name: {first_name} {last_name}")
+            else:
+                cursor.execute('''
+                    UPDATE users 
+                    SET email = %s, phone = %s
+                    WHERE user_id = %s
+                    RETURNING user_id
+                ''', (email, phone, user_id))
             
             result = cursor.fetchone()
             self.conn.commit()
