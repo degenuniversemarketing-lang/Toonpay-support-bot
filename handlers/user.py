@@ -8,8 +8,8 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
-# States - Added NAME state
-NAME, EMAIL, PHONE, QUESTION = range(4)
+# States - Export these variables
+CATEGORY, NAME, EMAIL, PHONE, QUESTION = range(5)
 
 # Ticket categories
 CATEGORIES = {
@@ -268,7 +268,7 @@ Need immediate assistance? Contact @ToonPaySupport"""
                 user.id, 
                 context.user_data['email'], 
                 context.user_data['phone'],
-                context.user_data.get('name', user.first_name)  # Pass name to database
+                context.user_data.get('name', user.first_name)
             )
             
             # Create ticket with category
