@@ -15,7 +15,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ConversationHandler,
     filters,
-    ContextTypes  # This was missing
+    ContextTypes
 )
 from telegram.error import TelegramError
 from database import Database
@@ -68,9 +68,6 @@ def main():
         logger.info("Initializing database...")
         db = Database()
         
-        # Store db in bot_data for access in handlers
-        # application.bot_data['db'] = db  # We'll set this after creating application
-        
         # Initialize handlers
         user_handlers = UserHandlers(db)
         admin_handlers = AdminHandlers(db)
@@ -103,7 +100,7 @@ def main():
                 CommandHandler('cancel', user_handlers.cancel),
                 CallbackQueryHandler(user_handlers.button_handler, pattern='^cancel$')
             ],
-            per_message=False,
+            per_message=True,  # Changed to True to avoid warning
             name="ticket_conversation"
         )
         
@@ -135,9 +132,10 @@ def main():
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
         
-        # Test if admin group is accessible
+        # Test if admin group is accessible (FIXED - added await)
         try:
-            application.bot.send_message(
+            # We need to await this since it's a coroutine
+            await application.bot.send_message(
                 chat_id=Config.ADMIN_GROUP_ID,
                 text="✅ **Bot is online and ready to receive tickets!**",
                 parse_mode='Markdown'
@@ -147,13 +145,13 @@ def main():
             logger.error(f"Failed to send message to admin group: {e}")
             # Notify super admin
             try:
-                application.bot.send_message(
+                await application.bot.send_message(
                     chat_id=Config.SUPER_ADMIN_ID,
                     text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.\n\nError: {str(e)}",
                     parse_mode='Markdown'
                 )
-            except:
-                pass
+            except Exception as e2:
+                logger.error(f"Failed to notify super admin: {e2}")
         
         # Start bot
         logger.info("Bot started successfully!")
