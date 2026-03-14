@@ -3,6 +3,7 @@ import sys
 import os
 import traceback
 from pathlib import Path
+import asyncio  # Added for async handling
 
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
@@ -61,8 +62,31 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Failed to send error to super admin: {e}")
 
-def main():
-    """Start the bot."""
+async def test_admin_group_connection(application):
+    """Test connection to admin group (separate async function)"""
+    try:
+        await application.bot.send_message(
+            chat_id=Config.ADMIN_GROUP_ID,
+            text="✅ **Bot is online and ready to receive tickets!**",
+            parse_mode='Markdown'
+        )
+        logger.info(f"Successfully connected to admin group: {Config.ADMIN_GROUP_ID}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send message to admin group: {e}")
+        # Notify super admin
+        try:
+            await application.bot.send_message(
+                chat_id=Config.SUPER_ADMIN_ID,
+                text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.\n\nError: {str(e)}",
+                parse_mode='Markdown'
+            )
+        except Exception as e2:
+            logger.error(f"Failed to notify super admin: {e2}")
+        return False
+
+async def main_async():
+    """Async main function"""
     try:
         # Initialize database
         logger.info("Initializing database...")
@@ -100,7 +124,7 @@ def main():
                 CommandHandler('cancel', user_handlers.cancel),
                 CallbackQueryHandler(user_handlers.button_handler, pattern='^cancel$')
             ],
-            per_message=True,  # Changed to True to avoid warning
+            per_message=True,
             name="ticket_conversation"
         )
         
@@ -132,30 +156,12 @@ def main():
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
         
-        # Test if admin group is accessible (FIXED - added await)
-        try:
-            # We need to await this since it's a coroutine
-            await application.bot.send_message(
-                chat_id=Config.ADMIN_GROUP_ID,
-                text="✅ **Bot is online and ready to receive tickets!**",
-                parse_mode='Markdown'
-            )
-            logger.info(f"Successfully connected to admin group: {Config.ADMIN_GROUP_ID}")
-        except Exception as e:
-            logger.error(f"Failed to send message to admin group: {e}")
-            # Notify super admin
-            try:
-                await application.bot.send_message(
-                    chat_id=Config.SUPER_ADMIN_ID,
-                    text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.\n\nError: {str(e)}",
-                    parse_mode='Markdown'
-                )
-            except Exception as e2:
-                logger.error(f"Failed to notify super admin: {e2}")
+        # Test admin group connection (now in async function)
+        await test_admin_group_connection(application)
         
         # Start bot
         logger.info("Bot started successfully!")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        await application.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
         logger.error(f"Fatal error starting bot: {e}")
@@ -174,6 +180,10 @@ def main():
         except:
             pass
         raise
+
+def main():
+    """Entry point - runs the async main function"""
+    asyncio.run(main_async())
 
 if __name__ == '__main__':
     main()
