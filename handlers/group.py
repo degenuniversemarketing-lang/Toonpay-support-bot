@@ -6,9 +6,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 class GroupHandlers:
-    def __init__(self):
-        self.activated_groups = set()  # Will be loaded from database
-    
     async def support(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /support command in groups - only works in activated groups"""
         if update.effective_chat.type == 'private':
@@ -22,7 +19,7 @@ class GroupHandlers:
             activated = db.is_group_activated(chat_id)
         else:
             # Fallback to config if db not available
-            activated = chat_id == Config.ADMIN_GROUP_ID  # For backward compatibility
+            activated = False
         
         if not activated:
             logger.warning(f"Unauthorized /support attempt in group {chat_id}")
