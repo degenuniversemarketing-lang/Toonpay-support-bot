@@ -1,9 +1,10 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import Database
-from utils.helpers import create_excel_sheet
+from utils.helpers import create_csv_file, create_csv_by_status
 import logging
 from config import Config
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,6 @@ class AdminHandlers:
     async def is_admin_group(self, update: Update) -> bool:
         """Check if command is from an admin group"""
         chat_id = update.effective_chat.id
-        # Since we're using a single admin group from config, just check that
         return chat_id == Config.ADMIN_GROUP_ID
     
     async def handle_admin_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -273,7 +273,7 @@ class AdminHandlers:
                 await update.message.reply_text(message, parse_mode='Markdown')
     
     async def download(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Download tickets as Excel"""
+        """Download tickets as CSV"""
         if not await self.is_admin_group(update):
             return
         
@@ -283,13 +283,63 @@ class AdminHandlers:
             await update.message.reply_text("📭 No tickets to export.")
             return
         
-        # Create Excel file
-        excel_file = create_excel_sheet(tickets)
+        # Create CSV file
+        csv_file = create_csv_file(tickets)
+        
+        # Get current date for filename
+        current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         await update.message.reply_document(
-            document=excel_file,
-            filename=f"support_tickets_{update.effective_date.strftime('%Y%m%d')}.xlsx",
-            caption=f"📊 **Support Tickets Export**\n"
-                    f"📅 {update.effective_date.strftime('%Y-%m-%d %H:%M')}\n"
-                    f"📈 Total: {len(tickets)} tickets"
+            document=csv_file,
+            filename=f"support_tickets_{current_date}.csv",
+            caption=f"📊 **Support Tickets Export (CSV)**\n"
+                    f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+                    f"📈 Total: {len(tickets)} tickets\n\n"
+                    f"✅ Solved/Closed and 🔄 In Progress/Pending tickets are in the same file"
+        )
+    
+    async def download_solved(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Download only solved/closed tickets as CSV"""
+        if not await self.is_admin_group(update):
+            return
+        
+        tickets = self.db.export_all_tickets()
+        
+        if not tickets:
+            await update.message.reply_text("📭 No tickets to export.")
+            return
+        
+        # Create CSV file with only solved/closed tickets
+        csv_file = create_csv_by_status(tickets, status_filter=['closed', 'solved'])
+        
+        current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        await update.message.reply_document(
+            document=csv_file,
+            filename=f"solved_closed_tickets_{current_date}.csv",
+            caption=f"📊 **Solved & Closed Tickets Export (CSV)**\n"
+                    f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
+    
+    async def download_pending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Download only pending/in-progress tickets as CSV"""
+        if not await self.is_admin_group(update):
+            return
+        
+        tickets = self.db.export_all_tickets()
+        
+        if not tickets:
+            await update.message.reply_text("📭 No tickets to export.")
+            return
+        
+        # Create CSV file with only pending/in-progress tickets
+        csv_file = create_csv_by_status(tickets, status_filter=['pending', 'in_progress', 'spam'])
+        
+        current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        await update.message.reply_document(
+            document=csv_file,
+            filename=f"pending_inprogress_tickets_{current_date}.csv",
+            caption=f"📊 **Pending & In-Progress Tickets Export (CSV)**\n"
+                    f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         )
