@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from src.models import User, Ticket
 from src.database import db_session
-from src.keyboards.user_keyboards import *
+from src.keyboards.user_keyboards import get_main_menu_keyboard, get_categories_keyboard
 from src.utils.helpers import generate_ticket_number, log_admin_action
 from src.config import Config
 
@@ -29,28 +29,40 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_session.add(db_user)
         db_session.commit()
     
-    welcome_text = (
-        f"👋 Welcome to Toonpay Support Bot!\n\n"
-        f"Hello {user.first_name}, I'm here to help you with any issues you're facing.\n\n"
-        f"📋 Please select an option below:"
-    )
-    
-    await update.message.reply_text(
-        welcome_text,
-        reply_markup=get_main_menu_keyboard()
-    )
+    # Check if started from group
+    if context.args and context.args[0] == "from_group":
+        welcome_text = (
+            f"👋 Welcome to Toonpay Support Bot!\n\n"
+            f"Hello {user.first_name}, I see you need help from our support group.\n\n"
+            f"📋 Please select a category for your issue:"
+        )
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=get_categories_keyboard()
+        )
+    else:
+        welcome_text = (
+            f"👋 Welcome to Toonpay Support Bot!\n\n"
+            f"Hello {user.first_name}, I'm here to help you with any issues you're facing.\n\n"
+            f"📋 Please select an option below:"
+        )
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=get_main_menu_keyboard()
+        )
 
 async def handle_category_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle category selection"""
     query = update.callback_query
     await query.answer()
     
-    category = query.data.replace('cat_', '')
+    category = query.data.replace('cat_', '').capitalize()
     context.user_data['category'] = category
     
     await query.edit_message_text(
-        f"📝 Selected category: {category}\n\n"
+        f"📝 Selected category: **{category}**\n\n"
         f"Please click the button below to create a new ticket:",
+        parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("➕ Create New Ticket", callback_data="new_ticket")
         ]])
@@ -82,14 +94,14 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get user's email"""
     context.user_data['email'] = update.message.text
-    await update.message.reply_text("📞 Please enter your phone number:")
+    await update.message.reply_text("📞 Please enter your phone number (with country code):")
     return PHONE
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get user's phone"""
     context.user_data['phone'] = update.message.text
     await update.message.reply_text(
-        "🆔 Please enter your User ID (if any, or type 'skip'):"
+        "🆔 Please enter your User ID (if you have one, or type 'skip'):"
     )
     return USER_ID
 
@@ -102,7 +114,9 @@ async def get_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['user_id_input'] = user_id_text
     
     await update.message.reply_text(
-        "📝 Please describe your issue in detail:"
+        "📝 Please describe your issue in detail:\n\n"
+        "_Be as specific as possible to help us assist you better._",
+        parse_mode='Markdown'
     )
     return ISSUE
 
@@ -149,14 +163,17 @@ async def get_issue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_ticket_to_admin_group(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket, user):
     """Send new ticket to admin group"""
+    from src.keyboards.admin_keyboards import get_admin_ticket_keyboard
+    
     ticket_message = (
         f"🆕 **New Support Ticket**\n\n"
         f"**Ticket:** `{ticket.ticket_number}`\n"
-        f"**User:** {ticket.name} (@{user.username if user.username else 'N/A'})\n"
+        f"**User:** {ticket.name}\n"
+        f"**Username:** @{user.username if user.username else 'N/A'}\n"
         f"**User ID:** `{user.id}`\n"
         f"**Category:** {ticket.category}\n"
-        f"**Email:** {ticket.email}\n"
-        f"**Phone:** {ticket.phone}\n\n"
+        f"**Email:** `{ticket.email}`\n"
+        f"**Phone:** `{ticket.phone}`\n\n"
         f"**Question:**\n{ticket.question}\n\n"
         f"**Time:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
     )
@@ -168,6 +185,16 @@ async def send_ticket_to_admin_group(update: Update, context: ContextTypes.DEFAU
         text=ticket_message,
         parse_mode='Markdown',
         reply_markup=keyboard
+    )
+
+async def handle_support_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle support button click"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "Please select a category for your issue:",
+        reply_markup=get_categories_keyboard()
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
