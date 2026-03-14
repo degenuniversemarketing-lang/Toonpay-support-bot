@@ -54,7 +54,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_admin_cancel_button, pattern="^cancel_"))
     application.add_handler(CallbackQueryHandler(handle_pending_reply_button, pattern="^pending_reply_"))
     
-    # Conversation handlers for ticket creation
+    # Conversation handlers for ticket creation - REMOVED the filters parameter
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_ticket_creation, pattern="^new_ticket$")],
         states={
@@ -64,8 +64,8 @@ def main():
             USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_user_id)],
             ISSUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_issue)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        filters=filters.ChatType.PRIVATE
+        fallbacks=[CommandHandler("cancel", cancel)]
+        # Removed the 'filters' parameter
     )
     application.add_handler(conv_handler)
     
