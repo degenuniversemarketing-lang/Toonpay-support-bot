@@ -2,7 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from database import Database
 from utils.validators import validate_email, validate_phone, sanitize_input
-from config import Config
+from config import Config  # Make sure this import is at the top
 import logging
 import traceback
 
@@ -194,7 +194,8 @@ Need immediate assistance? Contact @ToonPaySupport"""
         await update.message.reply_text(
             "✅ **Email saved!**\n\n"
             "📞 **Now send your phone number:**\n\n"
-            "Example: `+1234567890` or `1234567890`"
+            "Example: `+1234567890` or `1234567890`",
+            parse_mode='Markdown'
         )
         return PHONE
     
@@ -246,7 +247,6 @@ Need immediate assistance? Contact @ToonPaySupport"""
             
             if ticket_id:
                 # Notify admin group (single group from config)
-                from config import Config
                 ticket_info = (
                     f"🎫 **New Ticket #{ticket_id}**\n\n"
                     f"**Category:** {context.user_data['category']}\n"
@@ -279,11 +279,14 @@ Need immediate assistance? Contact @ToonPaySupport"""
                 except Exception as e:
                     logger.error(f"Failed to send to admin group: {e}")
                     # Notify super admin
-                    await context.bot.send_message(
-                        Config.SUPER_ADMIN_ID,
-                        f"⚠️ **Failed to send Ticket #{ticket_id} to admin group!**\n\nError: {str(e)}",
-                        parse_mode='Markdown'
-                    )
+                    try:
+                        await context.bot.send_message(
+                            Config.SUPER_ADMIN_ID,
+                            f"⚠️ **Failed to send Ticket #{ticket_id} to admin group!**\n\nError: {str(e)}",
+                            parse_mode='Markdown'
+                        )
+                    except:
+                        pass
                 
                 # Confirm to user
                 success_text = f"""✅ **Your ticket has been created!**
@@ -304,14 +307,17 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
                     parse_mode='Markdown'
                 )
                 # Notify super admin
-                await context.bot.send_message(
-                    Config.SUPER_ADMIN_ID,
-                    f"🚨 **Ticket Creation Failed**\n\n"
-                    f"User: @{user.username} (ID: {user.id})\n"
-                    f"Category: {context.user_data['category']}\n"
-                    f"Error: Database returned None",
-                    parse_mode='Markdown'
-                )
+                try:
+                    await context.bot.send_message(
+                        Config.SUPER_ADMIN_ID,
+                        f"🚨 **Ticket Creation Failed**\n\n"
+                        f"User: @{user.username} (ID: {user.id})\n"
+                        f"Category: {context.user_data['category']}\n"
+                        f"Error: Database returned None",
+                        parse_mode='Markdown'
+                    )
+                except:
+                    pass
             
             # Clear user data
             context.user_data.clear()
@@ -327,9 +333,8 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
                 parse_mode='Markdown'
             )
             
-            # Notify super admin
+            # Notify super admin - FIXED: Config is now accessible here
             try:
-                from config import Config
                 await context.bot.send_message(
                     Config.SUPER_ADMIN_ID,
                     f"🚨 **Ticket Creation Error**\n\n"
@@ -338,8 +343,8 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
                     f"Traceback:\n`{traceback.format_exc()[:500]}`",
                     parse_mode='Markdown'
                 )
-            except:
-                pass
+            except Exception as e2:
+                logger.error(f"Failed to notify super admin: {e2}")
             
             context.user_data.clear()
             return ConversationHandler.END
