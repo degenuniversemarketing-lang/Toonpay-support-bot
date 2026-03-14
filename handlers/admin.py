@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes
 from database import Database
 from utils.helpers import create_excel_sheet
 import logging
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +14,8 @@ class AdminHandlers:
     async def is_admin_group(self, update: Update) -> bool:
         """Check if command is from an admin group"""
         chat_id = update.effective_chat.id
-        admin_groups = self.db.get_admin_groups()
-        return chat_id in admin_groups
+        # Since we're using a single admin group from config, just check that
+        return chat_id == Config.ADMIN_GROUP_ID
     
     async def handle_admin_actions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle admin button actions (reply, progress, spam)"""
@@ -40,28 +41,41 @@ class AdminHandlers:
         
         elif data.startswith('progress_'):
             ticket_id = int(data.split('_')[1])
-            self.db.update_ticket_status(ticket_id, 'in_progress', admin.id, admin.username)
+            success = self.db.update_ticket_status(ticket_id, 'in_progress', admin.id, admin.username)
             
-            # Update the message
-            await query.edit_message_text(
-                f"✅ **Ticket #{ticket_id}**\n\n"
-                f"Status: 🔄 In Progress\n"
-                f"Admin: @{admin.username}\n\n"
-                f"The ticket has been marked as in progress.",
-                parse_mode='Markdown'
-            )
+            if success:
+                await query.edit_message_text(
+                    f"✅ **Ticket #{ticket_id}**\n\n"
+                    f"Status: 🔄 In Progress\n"
+                    f"Admin: @{admin.username}\n\n"
+                    f"The ticket has been marked as in progress.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ **Failed to update Ticket #{ticket_id}**\n\n"
+                    f"Please try again or check if ticket exists.",
+                    parse_mode='Markdown'
+                )
         
         elif data.startswith('spam_'):
             ticket_id = int(data.split('_')[1])
-            self.db.update_ticket_status(ticket_id, 'spam', admin.id, admin.username)
+            success = self.db.update_ticket_status(ticket_id, 'spam', admin.id, admin.username)
             
-            await query.edit_message_text(
-                f"🚫 **Ticket #{ticket_id}**\n\n"
-                f"Status: ❌ Closed as Spam\n"
-                f"Admin: @{admin.username}\n\n"
-                f"This ticket has been marked as spam and closed.",
-                parse_mode='Markdown'
-            )
+            if success:
+                await query.edit_message_text(
+                    f"🚫 **Ticket #{ticket_id}**\n\n"
+                    f"Status: ❌ Closed as Spam\n"
+                    f"Admin: @{admin.username}\n\n"
+                    f"This ticket has been marked as spam and closed.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ **Failed to mark Ticket #{ticket_id} as spam**\n\n"
+                    f"Please try again or check if ticket exists.",
+                    parse_mode='Markdown'
+                )
     
     async def handle_admin_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle admin reply to a ticket"""
@@ -78,15 +92,11 @@ class AdminHandlers:
         # Save reply
         if self.db.reply_to_ticket(ticket_id, reply_text, admin.id, admin.username):
             # Get ticket info to notify user
-            cursor = self.db.conn.cursor()
-            cursor.execute('''
-                SELECT user_id, question FROM tickets WHERE ticket_id = %s
-            ''', (ticket_id,))
-            result = cursor.fetchone()
-            cursor.close()
+            ticket = self.db.get_ticket(ticket_id)
             
-            if result:
-                user_id, question = result
+            if ticket:
+                user_id = ticket['user_id']
+                question = ticket['question']
                 
                 # Notify user
                 try:
@@ -99,13 +109,15 @@ class AdminHandlers:
                         f"Need more help? Create a new ticket with /start",
                         parse_mode='Markdown'
                     )
+                    logger.info(f"User {user_id} notified about ticket #{ticket_id}")
                 except Exception as e:
                     logger.error(f"Failed to notify user: {e}")
             
             await update.message.reply_text(
                 f"✅ **Reply sent for Ticket #{ticket_id}**\n\n"
                 f"Admin: @{admin.username}\n"
-                f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}"
+                f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}",
+                parse_mode='Markdown'
             )
             
             # Update the original admin group message if possible
@@ -115,14 +127,16 @@ class AdminHandlers:
                         f"✅ **Ticket #{ticket_id}**\n\n"
                         f"Status: ✅ Closed\n"
                         f"Replied by: @{admin.username}\n"
-                        f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}"
+                        f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}",
+                        parse_mode='Markdown'
                     )
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to update original message: {e}")
         else:
             await update.message.reply_text(
                 f"❌ **Failed to reply to Ticket #{ticket_id}**\n\n"
-                f"Ticket may be already closed or doesn't exist."
+                f"Ticket may be already closed or doesn't exist.",
+                parse_mode='Markdown'
             )
         
         del context.user_data['replying_to']
@@ -157,15 +171,14 @@ class AdminHandlers:
                 message += f"{status_emoji} **Ticket #{ticket['ticket_id']}**\n"
                 message += f"📅 {ticket['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
                 message += f"📧 {ticket.get('email', 'N/A')}\n"
-                message += f"❓ {ticket['question'][:100]}...\n"
+                message += f"❓ {ticket['question'][:100]}...\n\n"
                 
                 # Add action buttons for each ticket
                 keyboard = [[
                     InlineKeyboardButton("💬 Reply", callback_data=f"reply_{ticket['ticket_id']}"),
                     InlineKeyboardButton("🔄 In Progress", callback_data=f"progress_{ticket['ticket_id']}")
                 ]]
-                if len(user_tickets) == 1:  # Only add spam button if it's the only ticket
-                    keyboard.append([InlineKeyboardButton("❌ Spam", callback_data=f"spam_{ticket['ticket_id']}")])
+                keyboard.append([InlineKeyboardButton("❌ Spam", callback_data=f"spam_{ticket['ticket_id']}")])
                 
                 await update.message.reply_text(
                     message,
@@ -252,7 +265,12 @@ class AdminHandlers:
             else:
                 message += "**No tickets found**\n"
             
-            await update.message.reply_text(message, parse_mode='Markdown')
+            # Split long messages
+            if len(message) > 4000:
+                for i in range(0, len(message), 3500):
+                    await update.message.reply_text(message[i:i+3500], parse_mode='Markdown')
+            else:
+                await update.message.reply_text(message, parse_mode='Markdown')
     
     async def download(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Download tickets as Excel"""
