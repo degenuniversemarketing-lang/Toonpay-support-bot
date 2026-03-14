@@ -131,11 +131,13 @@ def main():
         application.add_handler(conv_handler)
         application.add_handler(CallbackQueryHandler(user_handlers.button_handler, pattern='^(my_tickets|help)$'))
         
-        # Admin group commands (only work in configured admin group)
+        # Admin group commands
         application.add_handler(CommandHandler('pending', admin_handlers.pending))
         application.add_handler(CommandHandler('stats', admin_handlers.stats))
         application.add_handler(CommandHandler('search', admin_handlers.search))
         application.add_handler(CommandHandler('download', admin_handlers.download))
+        application.add_handler(CommandHandler('download_solved', admin_handlers.download_solved))
+        application.add_handler(CommandHandler('download_pending', admin_handlers.download_pending))
         
         # Admin action handlers
         application.add_handler(CallbackQueryHandler(admin_handlers.handle_admin_actions, pattern='^(reply_|progress_|spam_)'))
