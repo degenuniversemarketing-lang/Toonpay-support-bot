@@ -4,6 +4,7 @@ from database import Database
 from utils.validators import validate_email, validate_phone, sanitize_input
 from config import Config
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,8 @@ Need immediate assistance? Contact @ToonPaySupport"""
             await update.message.reply_text(
                 "❌ **Invalid phone number!**\n\n"
                 "Please send a valid phone number (10-15 digits).\n"
-                "Example: `+1234567890` or `1234567890`"
+                "Example: `+1234567890` or `1234567890`",
+                parse_mode='Markdown'
             )
             return PHONE
         
@@ -216,59 +218,75 @@ Need immediate assistance? Contact @ToonPaySupport"""
             "Please include:\n"
             "• What happened?\n"
             "• When did it happen?\n"
-            "• Any error messages?"
+            "• Any error messages?",
+            parse_mode='Markdown'
         )
         return QUESTION
     
     async def get_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle question and create ticket"""
-        question = sanitize_input(update.message.text)
-        user = update.effective_user
-        
-        # Update user contact info
-        self.db.update_user_contact(user.id, context.user_data['email'], context.user_data['phone'])
-        
-        # Create ticket with category
-        full_question = f"[{context.user_data['category']}]\n\n{question}"
-        ticket_id = self.db.create_ticket(user.id, full_question)
-        
-        if ticket_id:
-            # Notify admin groups
-            admin_groups = self.db.get_admin_groups()
-            ticket_info = (
-                f"🎫 **New Ticket #{ticket_id}**\n\n"
-                f"**Category:** {context.user_data['category']}\n"
-                f"**From:** @{user.username or 'N/A'} ({user.first_name})\n"
-                f"**User ID:** `{user.id}`\n"
-                f"**Email:** `{context.user_data['email']}`\n"
-                f"**Phone:** `{context.user_data['phone']}`\n\n"
-                f"**Question:**\n{question}"
-            )
+        try:
+            question = sanitize_input(update.message.text)
+            user = update.effective_user
             
-            # Create inline buttons for admin
-            keyboard = [
-                [
-                    InlineKeyboardButton("💬 Reply", callback_data=f"reply_{ticket_id}"),
-                    InlineKeyboardButton("🔄 In Progress", callback_data=f"progress_{ticket_id}")
-                ],
-                [InlineKeyboardButton("❌ Close as Spam", callback_data=f"spam_{ticket_id}")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            if not question:
+                await update.message.reply_text(
+                    "❌ **Please describe your issue.**\n\n"
+                    "Try again:",
+                    parse_mode='Markdown'
+                )
+                return QUESTION
             
-            # Send to all admin groups
-            for group_id in admin_groups:
+            # Update user contact info
+            self.db.update_user_contact(user.id, context.user_data['email'], context.user_data['phone'])
+            
+            # Create ticket with category
+            full_question = f"[{context.user_data['category']}]\n\n{question}"
+            ticket_id = self.db.create_ticket(user.id, full_question)
+            
+            if ticket_id:
+                # Notify admin group (single group from config)
+                from config import Config
+                ticket_info = (
+                    f"🎫 **New Ticket #{ticket_id}**\n\n"
+                    f"**Category:** {context.user_data['category']}\n"
+                    f"**From:** @{user.username or 'N/A'} ({user.first_name})\n"
+                    f"**User ID:** `{user.id}`\n"
+                    f"**Email:** `{context.user_data['email']}`\n"
+                    f"**Phone:** `{context.user_data['phone']}`\n\n"
+                    f"**Question:**\n{question}"
+                )
+                
+                # Create inline buttons for admin
+                keyboard = [
+                    [
+                        InlineKeyboardButton("💬 Reply", callback_data=f"reply_{ticket_id}"),
+                        InlineKeyboardButton("🔄 In Progress", callback_data=f"progress_{ticket_id}")
+                    ],
+                    [InlineKeyboardButton("❌ Close as Spam", callback_data=f"spam_{ticket_id}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # Send to admin group
                 try:
                     await context.bot.send_message(
-                        group_id, 
+                        Config.ADMIN_GROUP_ID, 
                         ticket_info,
                         reply_markup=reply_markup,
                         parse_mode='Markdown'
                     )
+                    logger.info(f"Ticket #{ticket_id} sent to admin group")
                 except Exception as e:
-                    logger.error(f"Failed to send to group {group_id}: {e}")
-            
-            # Confirm to user
-            success_text = f"""✅ **Your ticket has been created!**
+                    logger.error(f"Failed to send to admin group: {e}")
+                    # Notify super admin
+                    await context.bot.send_message(
+                        Config.SUPER_ADMIN_ID,
+                        f"⚠️ **Failed to send Ticket #{ticket_id} to admin group!**\n\nError: {str(e)}",
+                        parse_mode='Markdown'
+                    )
+                
+                # Confirm to user
+                success_text = f"""✅ **Your ticket has been created!**
 
 **Ticket ID:** `#{ticket_id}`
 **Category:** {context.user_data['category']}
@@ -276,17 +294,55 @@ Need immediate assistance? Contact @ToonPaySupport"""
 We'll get back to you soon.
 
 You can check your ticket status using /start and clicking 'My Tickets'."""
+                
+                await update.message.reply_text(success_text, parse_mode='Markdown')
+            else:
+                # Ticket creation failed
+                await update.message.reply_text(
+                    "❌ **Failed to create ticket.**\n\n"
+                    "Please try again later or contact @ToonPaySupport",
+                    parse_mode='Markdown'
+                )
+                # Notify super admin
+                await context.bot.send_message(
+                    Config.SUPER_ADMIN_ID,
+                    f"🚨 **Ticket Creation Failed**\n\n"
+                    f"User: @{user.username} (ID: {user.id})\n"
+                    f"Category: {context.user_data['category']}\n"
+                    f"Error: Database returned None",
+                    parse_mode='Markdown'
+                )
             
-            await update.message.reply_text(success_text, parse_mode='Markdown')
-        else:
+            # Clear user data
+            context.user_data.clear()
+            return ConversationHandler.END
+            
+        except Exception as e:
+            logger.error(f"Error in ticket creation: {e}")
+            logger.error(traceback.format_exc())
+            
             await update.message.reply_text(
-                "❌ **Failed to create ticket.**\n\n"
-                "Please try again later or contact @ToonPaySupport"
+                "❌ **An error occurred while creating your ticket.**\n\n"
+                "Please try again later or contact @ToonPaySupport",
+                parse_mode='Markdown'
             )
-        
-        # Clear user data
-        context.user_data.clear()
-        return ConversationHandler.END
+            
+            # Notify super admin
+            try:
+                from config import Config
+                await context.bot.send_message(
+                    Config.SUPER_ADMIN_ID,
+                    f"🚨 **Ticket Creation Error**\n\n"
+                    f"User: @{update.effective_user.username} (ID: {update.effective_user.id})\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Traceback:\n`{traceback.format_exc()[:500]}`",
+                    parse_mode='Markdown'
+                )
+            except:
+                pass
+            
+            context.user_data.clear()
+            return ConversationHandler.END
     
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel the conversation"""
