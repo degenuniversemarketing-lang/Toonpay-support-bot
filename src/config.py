@@ -1,24 +1,24 @@
 import os
 from dotenv import load_dotenv
-from typing import List
 
 load_dotenv()
 
 class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
-    DATABASE_URL = os.getenv('DATABASE_URL')
+    ADMIN_GROUP_ID = int(os.getenv('ADMIN_GROUP_ID', '0'))
     SUPER_ADMIN_IDS = [int(id) for id in os.getenv('SUPER_ADMIN_IDS', '').split(',') if id]
-    ADMIN_GROUP_ID = int(os.getenv('ADMIN_GROUP_ID', 0))
+    DATABASE_URL = os.getenv('DATABASE_URL')
     
     # Categories
-    CATEGORIES = {
-        'card': '💳 Card Issue',
-        'kyc': '📋 KYC Issue',
-        'technical': '🔧 Technical Issue',
-        'payment': '💰 Payment Issue',
-        'other': '❓ Other'
-    }
+    CATEGORIES = [
+        'Card',
+        'KYC',
+        'Technical',
+        'Payment',
+        'Other'
+    ]
     
-    # Bot Settings
-    TICKETS_PER_PAGE = 10
-    MAX_PENDING_DISPLAY = 300
+    # Ticket status
+    STATUS_NEW = 'new'
+    STATUS_IN_PROGRESS = 'in_progress'
+    STATUS_CLOSED = 'closed'
