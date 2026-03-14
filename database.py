@@ -163,6 +163,17 @@ class Database:
             ''')
             logger.info("Ticket logs table created/verified")
             
+            # Custom commands table (NEW)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS custom_commands (
+                    command VARCHAR(50) PRIMARY KEY,
+                    content TEXT,
+                    added_by BIGINT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            logger.info("Custom commands table created/verified")
+            
             # Create indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)')
@@ -441,6 +452,156 @@ class Database:
         except Exception as e:
             logger.error(f"Error checking group activation for {group_id}: {e}")
             return False
+        finally:
+            if cursor:
+                cursor.close()
+    
+    # Custom commands methods (NEW)
+    def add_custom_command(self, command, content, added_by):
+        """Add a custom command"""
+        if not self.conn:
+            logger.error("No database connection for add_custom_command")
+            return False
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO custom_commands (command, content, added_by)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (command) DO UPDATE SET 
+                    content = EXCLUDED.content,
+                    added_by = EXCLUDED.added_by
+                RETURNING command
+            ''', (command, content, added_by))
+            
+            result = cursor.fetchone()
+            self.conn.commit()
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error adding custom command: {e}")
+            self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_custom_command(self, command):
+        """Get a custom command content"""
+        if not self.conn:
+            logger.error("No database connection for get_custom_command")
+            return None
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT * FROM custom_commands WHERE command = %s', (command,))
+            result = cursor.fetchone()
+            return result
+        except Exception as e:
+            logger.error(f"Error getting custom command: {e}")
+            return None
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_custom_commands(self):
+        """Get all custom commands"""
+        if not self.conn:
+            logger.error("No database connection for get_custom_commands")
+            return []
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT * FROM custom_commands ORDER BY command')
+            results = cursor.fetchall()
+            return results
+        except Exception as e:
+            logger.error(f"Error getting custom commands: {e}")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+
+    def remove_custom_command(self, command):
+        """Remove a custom command"""
+        if not self.conn:
+            logger.error("No database connection for remove_custom_command")
+            return False
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM custom_commands WHERE command = %s', (command,))
+            deleted = cursor.rowcount
+            self.conn.commit()
+            return deleted > 0
+        except Exception as e:
+            logger.error(f"Error removing custom command: {e}")
+            self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+    
+    # Broadcast methods (NEW)
+    def get_all_users(self):
+        """Get all users for broadcasting"""
+        if not self.conn:
+            logger.error("No database connection for get_all_users")
+            return []
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT user_id FROM users ORDER BY created_at DESC')
+            users = cursor.fetchall()
+            return users
+        except Exception as e:
+            logger.error(f"Error getting all users: {e}")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_all_users_with_stats(self):
+        """Get all users with their ticket statistics"""
+        if not self.conn:
+            logger.error("No database connection for get_all_users_with_stats")
+            return []
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('''
+                SELECT 
+                    u.user_id,
+                    u.username,
+                    u.first_name,
+                    u.last_name,
+                    u.email,
+                    u.phone,
+                    u.created_at,
+                    COUNT(t.ticket_id) as total_tickets,
+                    SUM(CASE WHEN t.status = 'closed' THEN 1 ELSE 0 END) as solved_tickets,
+                    SUM(CASE WHEN t.status IN ('pending', 'in_progress') THEN 1 ELSE 0 END) as in_progress_tickets,
+                    SUM(CASE WHEN t.status = 'spam' THEN 1 ELSE 0 END) as spam_tickets
+                FROM users u
+                LEFT JOIN tickets t ON u.user_id = t.user_id
+                GROUP BY u.user_id, u.username, u.first_name, u.last_name, u.email, u.phone, u.created_at
+                ORDER BY u.created_at DESC
+            ''')
+            users = cursor.fetchall()
+            
+            # Format name
+            for user in users:
+                user['name'] = f"{user['first_name']} {user.get('last_name', '')}".strip()
+            
+            return users
+        except Exception as e:
+            logger.error(f"Error getting users with stats: {e}")
+            return []
         finally:
             if cursor:
                 cursor.close()
@@ -923,9 +1084,9 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Delete old data
+    # Delete old data (UPDATED to support fractional days)
     def delete_old_data(self, days):
-        """Delete tickets older than specified days"""
+        """Delete tickets older than specified days (supports fractional days)"""
         if not self.conn:
             logger.error("No database connection for delete_old_data")
             return 0
@@ -935,9 +1096,9 @@ class Database:
             cursor = self.conn.cursor()
             cursor.execute('''
                 DELETE FROM tickets 
-                WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '%s days'
+                WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '%s seconds'
                 RETURNING ticket_id
-            ''', (days,))
+            ''', (days * 86400,))  # Convert days to seconds
             deleted = cursor.rowcount
             self.conn.commit()
             logger.info(f"Deleted {deleted} tickets older than {days} days")
