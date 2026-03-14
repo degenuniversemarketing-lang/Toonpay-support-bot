@@ -3,22 +3,46 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import datetime
 import logging
+import traceback
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self):
-        self.conn = psycopg2.connect(os.environ['DATABASE_URL'])
-        self.create_tables()
+        self.conn = None
+        self.connect()
+        if self.conn:
+            self.create_tables()
+    
+    def connect(self):
+        """Establish database connection"""
+        try:
+            database_url = os.environ.get('DATABASE_URL')
+            if not database_url:
+                logger.error("DATABASE_URL environment variable not set!")
+                return False
+            
+            logger.info(f"Connecting to database...")
+            self.conn = psycopg2.connect(database_url)
+            logger.info("Database connection successful")
+            return True
+        except Exception as e:
+            logger.error(f"Database connection failed: {e}")
+            logger.error(traceback.format_exc())
+            return False
     
     def create_tables(self):
-        cursor = self.conn.cursor()
+        """Create all necessary tables if they don't exist"""
+        if not self.conn:
+            logger.error("No database connection for table creation")
+            return False
         
-        # Create tables one by one with proper error handling
-        
-        # Users table
+        cursor = None
         try:
+            cursor = self.conn.cursor()
+            
+            # Users table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -31,11 +55,8 @@ class Database:
                 )
             ''')
             logger.info("Users table created/verified")
-        except Exception as e:
-            logger.error(f"Error creating users table: {e}")
-        
-        # Admin groups table (legacy - for backward compatibility)
-        try:
+            
+            # Admin groups table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admin_groups (
                     group_id BIGINT PRIMARY KEY,
@@ -44,11 +65,8 @@ class Database:
                 )
             ''')
             logger.info("Admin groups table created/verified")
-        except Exception as e:
-            logger.error(f"Error creating admin_groups table: {e}")
-        
-        # Activated groups table (for /support command)
-        try:
+            
+            # Activated groups table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS activated_groups (
                     group_id BIGINT PRIMARY KEY,
@@ -57,11 +75,8 @@ class Database:
                 )
             ''')
             logger.info("Activated groups table created/verified")
-        except Exception as e:
-            logger.error(f"Error creating activated_groups table: {e}")
-        
-        # Tickets table - without foreign key first
-        try:
+            
+            # Tickets table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tickets (
                     ticket_id SERIAL PRIMARY KEY,
@@ -77,11 +92,8 @@ class Database:
                 )
             ''')
             logger.info("Tickets table created/verified")
-        except Exception as e:
-            logger.error(f"Error creating tickets table: {e}")
-        
-        # Ticket logs table - without foreign key first
-        try:
+            
+            # Ticket logs table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS ticket_logs (
                     log_id SERIAL PRIMARY KEY,
@@ -93,27 +105,36 @@ class Database:
                 )
             ''')
             logger.info("Ticket logs table created/verified")
-        except Exception as e:
-            logger.error(f"Error creating ticket_logs table: {e}")
-        
-        self.conn.commit()
-        
-        # Now add indexes for better performance
-        try:
+            
+            # Create indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets(created_at)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ticket_logs_ticket_id ON ticket_logs(ticket_id)')
             logger.info("Indexes created/verified")
+            
+            self.conn.commit()
+            logger.info("Database initialization complete")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error creating indexes: {e}")
-        
-        self.conn.commit()
-        cursor.close()
-        logger.info("Database initialization complete")
+            logger.error(f"Error creating tables: {e}")
+            logger.error(traceback.format_exc())
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
     
     # User methods
     def add_user(self, user_id, username, first_name, last_name=None):
+        """Add or update a user"""
+        if not self.conn:
+            logger.error("No database connection for add_user")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
@@ -123,57 +144,145 @@ class Database:
                 DO UPDATE SET username = EXCLUDED.username,
                              first_name = EXCLUDED.first_name,
                              last_name = EXCLUDED.last_name
+                RETURNING user_id
             ''', (user_id, username, first_name, last_name))
+            
+            result = cursor.fetchone()
             self.conn.commit()
-            cursor.close()
+            logger.info(f"User {user_id} added/updated successfully")
+            return result is not None
+            
         except Exception as e:
-            logger.error(f"Error adding user: {e}")
-            self.conn.rollback()
+            logger.error(f"Error adding user {user_id}: {e}")
+            logger.error(traceback.format_exc())
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
     
     def update_user_contact(self, user_id, email, phone):
+        """Update user contact information"""
+        if not self.conn:
+            logger.error("No database connection for update_user_contact")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 UPDATE users 
                 SET email = %s, phone = %s
                 WHERE user_id = %s
+                RETURNING user_id
             ''', (email, phone, user_id))
+            
+            result = cursor.fetchone()
             self.conn.commit()
-            cursor.close()
+            
+            if result:
+                logger.info(f"Contact info updated for user {user_id}")
+                return True
+            else:
+                logger.warning(f"User {user_id} not found for contact update")
+                return False
+                
         except Exception as e:
-            logger.error(f"Error updating user contact: {e}")
-            self.conn.rollback()
+            logger.error(f"Error updating user contact for {user_id}: {e}")
+            logger.error(traceback.format_exc())
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
     
     def get_user(self, user_id):
+        """Get user by ID"""
+        if not self.conn:
+            logger.error("No database connection for get_user")
+            return None
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
             user = cursor.fetchone()
-            cursor.close()
             return user
         except Exception as e:
-            logger.error(f"Error getting user: {e}")
+            logger.error(f"Error getting user {user_id}: {e}")
             return None
+        finally:
+            if cursor:
+                cursor.close()
     
     # Ticket methods
     def create_ticket(self, user_id, question):
+        """Create a new ticket"""
+        if not self.conn:
+            logger.error("No database connection for create_ticket")
+            return None
+        
+        cursor = None
         try:
+            # First verify user exists
+            user = self.get_user(user_id)
+            if not user:
+                logger.warning(f"User {user_id} not found, adding them first")
+                # This shouldn't happen as user should be added in start command
+                # But just in case, we'll try to add a basic user record
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT INTO users (user_id, username, first_name)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                ''', (user_id, f"user_{user_id}", "User"))
+                self.conn.commit()
+                if cursor:
+                    cursor.close()
+            
+            # Now create the ticket
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO tickets (user_id, question, status)
                 VALUES (%s, %s, 'pending')
                 RETURNING ticket_id
             ''', (user_id, question))
-            ticket_id = cursor.fetchone()[0]
-            self.conn.commit()
-            cursor.close()
-            return ticket_id
-        except Exception as e:
-            logger.error(f"Error creating ticket: {e}")
+            
+            result = cursor.fetchone()
+            if result and len(result) > 0:
+                ticket_id = result[0]
+                self.conn.commit()
+                logger.info(f"Ticket {ticket_id} created for user {user_id}")
+                return ticket_id
+            else:
+                logger.error(f"No ticket_id returned from INSERT for user {user_id}")
+                self.conn.rollback()
+                return None
+                
+        except psycopg2.errors.UndefinedColumn as e:
+            logger.error(f"Database schema error - missing column: {e}")
+            logger.error(traceback.format_exc())
             self.conn.rollback()
             return None
+        except Exception as e:
+            logger.error(f"Error creating ticket for user {user_id}: {e}")
+            logger.error(traceback.format_exc())
+            if self.conn:
+                self.conn.rollback()
+            return None
+        finally:
+            if cursor:
+                cursor.close()
     
     def get_pending_tickets(self):
+        """Get all pending and in-progress tickets"""
+        if not self.conn:
+            logger.error("No database connection for get_pending_tickets")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -184,13 +293,22 @@ class Database:
                 ORDER BY t.created_at DESC
             ''')
             tickets = cursor.fetchall()
-            cursor.close()
+            logger.info(f"Found {len(tickets)} pending tickets")
             return tickets
         except Exception as e:
             logger.error(f"Error getting pending tickets: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
     def get_user_tickets(self, user_id):
+        """Get all tickets for a specific user"""
+        if not self.conn:
+            logger.error("No database connection for get_user_tickets")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -199,13 +317,22 @@ class Database:
                 ORDER BY created_at DESC
             ''', (user_id,))
             tickets = cursor.fetchall()
-            cursor.close()
+            logger.info(f"Found {len(tickets)} tickets for user {user_id}")
             return tickets
         except Exception as e:
-            logger.error(f"Error getting user tickets: {e}")
+            logger.error(f"Error getting user tickets for {user_id}: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
     def get_ticket(self, ticket_id):
+        """Get ticket by ID"""
+        if not self.conn:
+            logger.error("No database connection for get_ticket")
+            return None
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -215,13 +342,21 @@ class Database:
                 WHERE t.ticket_id = %s
             ''', (ticket_id,))
             ticket = cursor.fetchone()
-            cursor.close()
             return ticket
         except Exception as e:
-            logger.error(f"Error getting ticket: {e}")
+            logger.error(f"Error getting ticket {ticket_id}: {e}")
             return None
+        finally:
+            if cursor:
+                cursor.close()
     
     def reply_to_ticket(self, ticket_id, admin_answer, admin_id, admin_username):
+        """Reply to a ticket and close it"""
+        if not self.conn:
+            logger.error("No database connection for reply_to_ticket")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             
@@ -258,17 +393,31 @@ class Database:
                     INSERT INTO ticket_logs (ticket_id, action, admin_id, admin_username)
                     VALUES (%s, 'replied', %s, %s)
                 ''', (ticket_id, admin_id, admin_username))
-            
-            self.conn.commit()
-            cursor.close()
-            return result is not None
+                self.conn.commit()
+                logger.info(f"Ticket {ticket_id} replied by {admin_username}")
+                return True
+            else:
+                logger.warning(f"Ticket {ticket_id} update returned no rows")
+                self.conn.rollback()
+                return False
             
         except Exception as e:
-            logger.error(f"Error replying to ticket: {e}")
-            self.conn.rollback()
+            logger.error(f"Error replying to ticket {ticket_id}: {e}")
+            logger.error(traceback.format_exc())
+            if self.conn:
+                self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
     
     def update_ticket_status(self, ticket_id, status, admin_id, admin_username):
+        """Update ticket status"""
+        if not self.conn:
+            logger.error("No database connection for update_ticket_status")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
@@ -278,119 +427,205 @@ class Database:
                     replied_by_username = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE ticket_id = %s
+                RETURNING ticket_id
             ''', (status, admin_id, admin_username, ticket_id))
             
-            # Log the action
-            cursor.execute('''
-                INSERT INTO ticket_logs (ticket_id, action, admin_id, admin_username)
-                VALUES (%s, %s, %s, %s)
-            ''', (ticket_id, status, admin_id, admin_username))
+            result = cursor.fetchone()
             
-            self.conn.commit()
-            cursor.close()
-            return True
+            if result:
+                # Log the action
+                cursor.execute('''
+                    INSERT INTO ticket_logs (ticket_id, action, admin_id, admin_username)
+                    VALUES (%s, %s, %s, %s)
+                ''', (ticket_id, status, admin_id, admin_username))
+                self.conn.commit()
+                logger.info(f"Ticket {ticket_id} status updated to {status} by {admin_username}")
+                return True
+            else:
+                logger.warning(f"Ticket {ticket_id} status update returned no rows")
+                self.conn.rollback()
+                return False
+                
         except Exception as e:
-            logger.error(f"Error updating ticket status: {e}")
-            self.conn.rollback()
+            logger.error(f"Error updating ticket status for {ticket_id}: {e}")
+            logger.error(traceback.format_exc())
+            if self.conn:
+                self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
     
-    # Admin group methods (legacy)
+    # Admin group methods
     def add_admin_group(self, group_id, added_by):
+        """Add an admin group"""
+        if not self.conn:
+            logger.error("No database connection for add_admin_group")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO admin_groups (group_id, added_by)
                 VALUES (%s, %s)
                 ON CONFLICT (group_id) DO NOTHING
+                RETURNING group_id
             ''', (group_id, added_by))
+            
+            result = cursor.fetchone()
             self.conn.commit()
-            cursor.close()
-            return True
+            return result is not None
         except Exception as e:
-            logger.error(f"Error adding admin group: {e}")
+            logger.error(f"Error adding admin group {group_id}: {e}")
             self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
     
     def remove_admin_group(self, group_id):
+        """Remove an admin group"""
+        if not self.conn:
+            logger.error("No database connection for remove_admin_group")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('DELETE FROM admin_groups WHERE group_id = %s', (group_id,))
+            deleted = cursor.rowcount
             self.conn.commit()
-            cursor.close()
-            return True
+            return deleted > 0
         except Exception as e:
-            logger.error(f"Error removing admin group: {e}")
+            logger.error(f"Error removing admin group {group_id}: {e}")
             self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
     
     def get_admin_groups(self):
+        """Get all admin groups"""
+        if not self.conn:
+            logger.error("No database connection for get_admin_groups")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('SELECT group_id FROM admin_groups')
             groups = [row[0] for row in cursor.fetchall()]
-            cursor.close()
             return groups
         except Exception as e:
             logger.error(f"Error getting admin groups: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
-    # Activated groups methods (for /support command)
+    # Activated groups methods
     def activate_group(self, group_id, activated_by):
         """Activate a group for /support command"""
+        if not self.conn:
+            logger.error("No database connection for activate_group")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 INSERT INTO activated_groups (group_id, activated_by)
                 VALUES (%s, %s)
                 ON CONFLICT (group_id) DO NOTHING
+                RETURNING group_id
             ''', (group_id, activated_by))
+            
+            result = cursor.fetchone()
             self.conn.commit()
-            cursor.close()
-            return True
+            return result is not None
         except Exception as e:
-            logger.error(f"Error activating group: {e}")
+            logger.error(f"Error activating group {group_id}: {e}")
             self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
 
     def deactivate_group(self, group_id):
         """Deactivate a group"""
+        if not self.conn:
+            logger.error("No database connection for deactivate_group")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('DELETE FROM activated_groups WHERE group_id = %s', (group_id,))
+            deleted = cursor.rowcount
             self.conn.commit()
-            cursor.close()
-            return True
+            return deleted > 0
         except Exception as e:
-            logger.error(f"Error deactivating group: {e}")
+            logger.error(f"Error deactivating group {group_id}: {e}")
             self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
 
     def get_activated_groups(self):
         """Get all activated groups"""
+        if not self.conn:
+            logger.error("No database connection for get_activated_groups")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('SELECT group_id FROM activated_groups')
             groups = [row[0] for row in cursor.fetchall()]
-            cursor.close()
             return groups
         except Exception as e:
             logger.error(f"Error getting activated groups: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
 
     def is_group_activated(self, group_id):
         """Check if a group is activated"""
+        if not self.conn:
+            logger.error("No database connection for is_group_activated")
+            return False
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('SELECT 1 FROM activated_groups WHERE group_id = %s', (group_id,))
             result = cursor.fetchone()
-            cursor.close()
             return result is not None
         except Exception as e:
-            logger.error(f"Error checking group activation: {e}")
+            logger.error(f"Error checking group activation for {group_id}: {e}")
             return False
+        finally:
+            if cursor:
+                cursor.close()
     
     # Statistics
     def get_stats(self):
+        """Get bot statistics"""
+        if not self.conn:
+            logger.error("No database connection for get_stats")
+            return {
+                'total': 0,
+                'closed': 0,
+                'in_progress': 0,
+                'pending': 0,
+                'spam': 0,
+                'admin_stats': []
+            }
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             
@@ -416,15 +651,15 @@ class Database:
             
             # Admin stats
             cursor.execute('''
-                SELECT replied_by_username, COUNT(*) as solved,
-                       SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_count
+                SELECT 
+                    COALESCE(replied_by_username, 'Unknown') as admin,
+                    COUNT(*) as solved,
+                    SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_count
                 FROM tickets 
                 WHERE replied_by_username IS NOT NULL
                 GROUP BY replied_by_username
             ''')
             admin_stats = cursor.fetchall()
-            
-            cursor.close()
             
             return {
                 'total': total,
@@ -444,9 +679,18 @@ class Database:
                 'spam': 0,
                 'admin_stats': []
             }
+        finally:
+            if cursor:
+                cursor.close()
     
     # Search
     def search_user(self, query):
+        """Search users by various fields"""
+        if not self.conn:
+            logger.error("No database connection for search_user")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -468,14 +712,22 @@ class Database:
                 ''', (user['user_id'],))
                 user['tickets'] = cursor.fetchall()
             
-            cursor.close()
             return users
         except Exception as e:
-            logger.error(f"Error searching user: {e}")
+            logger.error(f"Error searching user with query '{query}': {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
     # Export data
     def export_all_tickets(self):
+        """Export all tickets for Excel download"""
+        if not self.conn:
+            logger.error("No database connection for export_all_tickets")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -496,13 +748,21 @@ class Database:
                 ORDER BY u.user_id, t.created_at
             ''')
             tickets = cursor.fetchall()
-            cursor.close()
             return tickets
         except Exception as e:
             logger.error(f"Error exporting tickets: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
     def export_by_status(self, status):
+        """Export tickets by status"""
+        if not self.conn:
+            logger.error("No database connection for export_by_status")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -524,14 +784,22 @@ class Database:
                 ORDER BY u.user_id, t.created_at
             ''', (status, status))
             tickets = cursor.fetchall()
-            cursor.close()
             return tickets
         except Exception as e:
-            logger.error(f"Error exporting by status: {e}")
+            logger.error(f"Error exporting by status {status}: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
     # Ticket logs
     def get_ticket_logs(self, ticket_id):
+        """Get logs for a specific ticket"""
+        if not self.conn:
+            logger.error("No database connection for get_ticket_logs")
+            return []
+        
+        cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
@@ -540,25 +808,57 @@ class Database:
                 ORDER BY timestamp DESC
             ''', (ticket_id,))
             logs = cursor.fetchall()
-            cursor.close()
             return logs
         except Exception as e:
-            logger.error(f"Error getting ticket logs: {e}")
+            logger.error(f"Error getting ticket logs for {ticket_id}: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
     
     # Delete old data
     def delete_old_data(self, days):
+        """Delete tickets older than specified days"""
+        if not self.conn:
+            logger.error("No database connection for delete_old_data")
+            return 0
+        
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 DELETE FROM tickets 
                 WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '%s days'
+                RETURNING ticket_id
             ''', (days,))
             deleted = cursor.rowcount
             self.conn.commit()
-            cursor.close()
+            logger.info(f"Deleted {deleted} tickets older than {days} days")
             return deleted
         except Exception as e:
             logger.error(f"Error deleting old data: {e}")
-            self.conn.rollback()
+            if self.conn:
+                self.conn.rollback()
             return 0
+        finally:
+            if cursor:
+                cursor.close()
+    
+    # Health check
+    def check_connection(self):
+        """Check if database connection is alive"""
+        if not self.conn:
+            return False
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+            return True
+        except Exception as e:
+            logger.error(f"Database connection check failed: {e}")
+            return False
+        finally:
+            if cursor:
+                cursor.close()
