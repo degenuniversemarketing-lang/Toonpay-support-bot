@@ -11,6 +11,8 @@ class Database:
     def create_tables(self):
         cursor = self.conn.cursor()
         
+        # Create tables in correct order (no foreign key dependencies first)
+        
         # Users table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -24,7 +26,16 @@ class Database:
             )
         ''')
         
-        # Tickets table
+        # Admin groups table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admin_groups (
+                group_id BIGINT PRIMARY KEY,
+                added_by BIGINT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Tickets table (no foreign key constraints yet)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 ticket_id SERIAL PRIMARY KEY,
@@ -36,21 +47,11 @@ class Database:
                 replied_by_username VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                closed_at TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                closed_at TIMESTAMP
             )
         ''')
         
-        # Admin groups table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS admin_groups (
-                group_id BIGINT PRIMARY KEY,
-                added_by BIGINT,
-                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Ticket logs table
+        # Ticket logs table (no foreign key constraints yet)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ticket_logs (
                 log_id SERIAL PRIMARY KEY,
@@ -58,14 +59,37 @@ class Database:
                 action VARCHAR(50),
                 admin_id BIGINT,
                 admin_username VARCHAR(255),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id)
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         self.conn.commit()
+        
+        # Now add foreign key constraints separately
+        try:
+            cursor.execute('''
+                ALTER TABLE tickets 
+                ADD CONSTRAINT fk_tickets_user 
+                FOREIGN KEY (user_id) 
+                REFERENCES users(user_id)
+            ''')
+        except psycopg2.errors.DuplicateObject:
+            pass  # Constraint already exists
+        
+        try:
+            cursor.execute('''
+                ALTER TABLE ticket_logs 
+                ADD CONSTRAINT fk_logs_ticket 
+                FOREIGN KEY (ticket_id) 
+                REFERENCES tickets(ticket_id)
+            ''')
+        except psycopg2.errors.DuplicateObject:
+            pass  # Constraint already exists
+        
+        self.conn.commit()
         cursor.close()
     
+    # [Rest of your database methods remain the same...]
     # User methods
     def add_user(self, user_id, username, first_name, last_name=None):
         cursor = self.conn.cursor()
