@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+import traceback
 from pathlib import Path
 
 # Add current directory to path
@@ -15,6 +16,7 @@ from telegram.ext import (
     ConversationHandler,
     filters
 )
+from telegram.error import TelegramError
 from database import Database
 from handlers.user import UserHandlers, CATEGORY, EMAIL, PHONE, QUESTION
 from handlers.admin import AdminHandlers
@@ -28,6 +30,35 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Global error handler to notify super admin
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle errors and notify super admin"""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    
+    # Prepare error message
+    error_msg = f"🚨 **Bot Error Alert** 🚨\n\n"
+    
+    if update:
+        if update.effective_user:
+            error_msg += f"**User:** @{update.effective_user.username} (ID: `{update.effective_user.id}`)\n"
+        if update.effective_chat:
+            error_msg += f"**Chat:** {update.effective_chat.title or 'Private'} (ID: `{update.effective_chat.id}`)\n"
+        if update.effective_message:
+            error_msg += f"**Message:** `{update.effective_message.text}`\n"
+    
+    error_msg += f"\n**Error:** `{str(context.error)[:200]}`\n"
+    error_msg += f"**Traceback:**\n`{traceback.format_exc()[:1000]}`"
+    
+    # Send to super admin
+    try:
+        await context.bot.send_message(
+            chat_id=Config.SUPER_ADMIN_ID,
+            text=error_msg,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Failed to send error to super admin: {e}")
 
 def main():
     """Start the bot."""
@@ -45,6 +76,9 @@ def main():
         # Create application
         logger.info("Creating bot application...")
         application = Application.builder().token(Config.BOT_TOKEN).build()
+        
+        # Add error handler
+        application.add_error_handler(error_handler)
         
         # User conversation handler for ticket creation
         conv_handler = ConversationHandler(
@@ -70,7 +104,7 @@ def main():
         application.add_handler(conv_handler)
         application.add_handler(CallbackQueryHandler(user_handlers.button_handler, pattern='^(my_tickets|help)$'))
         
-        # Admin group commands
+        # Admin group commands (only work in configured admin group)
         application.add_handler(CommandHandler('pending', admin_handlers.pending))
         application.add_handler(CommandHandler('stats', admin_handlers.stats))
         application.add_handler(CommandHandler('search', admin_handlers.search))
@@ -85,21 +119,48 @@ def main():
             admin_handlers.handle_admin_reply
         ))
         
-        # Group support command
+        # Group support command (works in any group, bot checks if group is activated)
         application.add_handler(CommandHandler('support', group_handlers.support))
         
-        # Super admin commands
-        application.add_handler(CommandHandler('add', super_admin_handlers.add_group))
-        application.add_handler(CommandHandler('remove', super_admin_handlers.remove_group))
-        application.add_handler(CommandHandler('listgroups', super_admin_handlers.list_groups))
-        application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data))
+        # Super admin commands (only for super admin in private)
+        application.add_handler(CommandHandler('activate', super_admin_handlers.activate_group, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('deactivate', super_admin_handlers.deactivate_group, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
+        
+        # Test if admin group is accessible
+        try:
+            application.bot.send_message(
+                chat_id=Config.ADMIN_GROUP_ID,
+                text="✅ **Bot is online and ready to receive tickets!**",
+                parse_mode='Markdown'
+            )
+            logger.info(f"Successfully connected to admin group: {Config.ADMIN_GROUP_ID}")
+        except Exception as e:
+            logger.error(f"Failed to send message to admin group: {e}")
+            # Notify super admin
+            application.bot.send_message(
+                chat_id=Config.SUPER_ADMIN_ID,
+                text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.",
+                parse_mode='Markdown'
+            )
         
         # Start bot
         logger.info("Bot started successfully!")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
-        logger.error(f"Error starting bot: {e}")
+        logger.error(f"Fatal error starting bot: {e}")
+        # Try to notify super admin via raw request
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": Config.SUPER_ADMIN_ID,
+                "text": f"🚨 **FATAL BOT ERROR** 🚨\n\nBot failed to start!\nError: {str(e)}",
+                "parse_mode": "Markdown"
+            }
+        )
         raise
 
 if __name__ == '__main__':
