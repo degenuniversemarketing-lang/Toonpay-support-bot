@@ -14,15 +14,15 @@ class SuperAdminHandlers:
         from config import Config
         return update.effective_user.id == Config.SUPER_ADMIN_ID
     
-    async def add_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Add a public group where /support command will work"""
+    async def activate_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Activate a group for /support command"""
         if not await self.is_super_admin(update):
             await update.message.reply_text("❌ You are not authorized to use this command.")
             return
         
         if not context.args:
             await update.message.reply_text(
-                "📝 **Usage:** `/add <group_id>`\n\n"
+                "📝 **Usage:** `/activate <group_id>`\n\n"
                 "Get group ID by:\n"
                 "1. Add @getidsbot to your group\n"
                 "2. Send any message\n"
@@ -33,62 +33,69 @@ class SuperAdminHandlers:
         
         try:
             group_id = int(context.args[0])
-            self.db.add_admin_group(group_id, update.effective_user.id)
             
             # Test if bot can send message to the group
             try:
                 await context.bot.send_message(
                     group_id,
-                    "✅ **This group has been added as a support channel!**\n\n"
-                    "Users can now use /support command here.\n"
-                    "New tickets will appear in this group.",
+                    "✅ **This group has been activated for ToonPay Support!**\n\n"
+                    "Users can now use /support command here.",
                     parse_mode='Markdown'
                 )
-                await update.message.reply_text(f"✅ Group `{group_id}` added successfully as support channel!", parse_mode='Markdown')
-            except:
+                
+                # Save to database
+                self.db.activate_group(group_id, update.effective_user.id)
+                
                 await update.message.reply_text(
-                    f"⚠️ Group `{group_id}` added but I couldn't send a test message.\n"
-                    f"Make sure I'm an admin in that group!",
+                    f"✅ Group `{group_id}` activated successfully!\n\n"
+                    f"Users can now use /support in that group.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ **Failed to activate group**\n\n"
+                    f"Make sure I'm an admin in that group!\n"
+                    f"Error: {str(e)}",
                     parse_mode='Markdown'
                 )
                 
         except ValueError:
             await update.message.reply_text("❌ Invalid group ID. Must be a number.")
-        except Exception as e:
-            logger.error(f"Error adding group: {e}")
-            await update.message.reply_text(f"❌ Error adding group: {str(e)}")
     
-    async def remove_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Remove a group from support channels"""
+    async def deactivate_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Deactivate a group"""
         if not await self.is_super_admin(update):
             await update.message.reply_text("❌ You are not authorized to use this command.")
             return
         
         if not context.args:
-            await update.message.reply_text("📝 **Usage:** `/remove <group_id>`", parse_mode='Markdown')
+            await update.message.reply_text("📝 **Usage:** `/deactivate <group_id>`", parse_mode='Markdown')
             return
         
         try:
             group_id = int(context.args[0])
-            self.db.remove_admin_group(group_id)
-            await update.message.reply_text(f"✅ Group `{group_id}` removed from support channels.", parse_mode='Markdown')
+            self.db.deactivate_group(group_id)
+            await update.message.reply_text(
+                f"✅ Group `{group_id}` deactivated successfully.",
+                parse_mode='Markdown'
+            )
         except ValueError:
             await update.message.reply_text("❌ Invalid group ID. Must be a number.")
     
-    async def list_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """List all support channels"""
+    async def list_activated_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all activated groups"""
         if not await self.is_super_admin(update):
             await update.message.reply_text("❌ You are not authorized to use this command.")
             return
         
-        groups = self.db.get_admin_groups()
+        groups = self.db.get_activated_groups()
         if groups:
-            message = "📋 **Support Channels:**\n\n"
+            message = "📋 **Activated Groups:**\n\n"
             for group_id in groups:
                 message += f"• `{group_id}`\n"
             message += f"\nTotal: {len(groups)} groups"
         else:
-            message = "📭 No support channels configured.\n\nUse `/add <group_id>` to add one."
+            message = "📭 No activated groups.\n\nUse `/activate <group_id>` to add one."
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
@@ -119,6 +126,3 @@ class SuperAdminHandlers:
             )
         except ValueError:
             await update.message.reply_text("❌ Invalid number of days.")
-        except Exception as e:
-            logger.error(f"Error deleting data: {e}")
-            await update.message.reply_text(f"❌ Error: {str(e)}")
