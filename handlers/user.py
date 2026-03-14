@@ -2,14 +2,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from database import Database
 from utils.validators import validate_email, validate_phone, sanitize_input
-from config import Config  # Make sure this import is at the top
+from config import Config
 import logging
 import traceback
 
 logger = logging.getLogger(__name__)
 
-# States
-CATEGORY, EMAIL, PHONE, QUESTION = range(4)
+# States - Added NAME state
+NAME, EMAIL, PHONE, QUESTION = range(4)
 
 # Ticket categories
 CATEGORIES = {
@@ -40,9 +40,11 @@ I'm here to help you with any issues you might have.
 **How to create a ticket:**
 1️⃣ Click 'New Ticket'
 2️⃣ Select your issue category
-3️⃣ Provide your details
-4️⃣ Describe your issue
-5️⃣ Submit
+3️⃣ Provide your name
+4️⃣ Provide your email
+5️⃣ Provide your phone number
+6️⃣ Describe your issue
+7️⃣ Submit
 
 ⏱️ **ToonPay Support Available 24/7**
 
@@ -130,15 +132,17 @@ Click the button below to start!"""
 **How to create a ticket:**
 1. Click "New Ticket"
 2. Select category
-3. Provide your details
-4. Describe your issue
-5. Submit
+3. Provide your full name
+4. Provide your email address
+5. Provide your phone number
+6. Describe your issue
+7. Submit
 
 **Important Notes:**
 • Each ticket is for one issue only
 • Tickets close after admin reply
 • Create new ticket for new questions
-• Your email and phone are saved for faster support
+• Your details are saved for faster support
 
 ⏱️ **ToonPay Support Available 24/7**
 
@@ -171,7 +175,28 @@ Need immediate assistance? Contact @ToonPaySupport"""
         context.user_data['category'] = CATEGORIES.get(category, 'Other')
         
         await query.edit_message_text(
-            "📧 **Please enter your email address:**\n\n"
+            "👤 **Please enter your full name:**\n\n"
+            "Example: `John Doe`",
+            parse_mode='Markdown'
+        )
+        return NAME
+    
+    async def get_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get and validate name"""
+        name = sanitize_input(update.message.text.strip())
+        
+        if len(name) < 2:
+            await update.message.reply_text(
+                "❌ **Please enter a valid name (at least 2 characters).**\n\n"
+                "Try again:",
+                parse_mode='Markdown'
+            )
+            return NAME
+        
+        context.user_data['name'] = name
+        await update.message.reply_text(
+            "✅ **Name saved!**\n\n"
+            "📧 **Now enter your email address:**\n\n"
             "Example: `user@example.com`",
             parse_mode='Markdown'
         )
@@ -238,19 +263,25 @@ Need immediate assistance? Contact @ToonPaySupport"""
                 )
                 return QUESTION
             
-            # Update user contact info
-            self.db.update_user_contact(user.id, context.user_data['email'], context.user_data['phone'])
+            # Update user contact info with name
+            self.db.update_user_contact(
+                user.id, 
+                context.user_data['email'], 
+                context.user_data['phone'],
+                context.user_data.get('name', user.first_name)  # Pass name to database
+            )
             
             # Create ticket with category
             full_question = f"[{context.user_data['category']}]\n\n{question}"
             ticket_id = self.db.create_ticket(user.id, full_question)
             
             if ticket_id:
-                # Notify admin group (single group from config)
+                # Notify admin group
                 ticket_info = (
                     f"🎫 **New Ticket #{ticket_id}**\n\n"
                     f"**Category:** {context.user_data['category']}\n"
-                    f"**From:** @{user.username or 'N/A'} ({user.first_name})\n"
+                    f"**Name:** {context.user_data.get('name', user.first_name)}\n"
+                    f"**From:** @{user.username or 'N/A'}\n"
                     f"**User ID:** `{user.id}`\n"
                     f"**Email:** `{context.user_data['email']}`\n"
                     f"**Phone:** `{context.user_data['phone']}`\n\n"
@@ -293,6 +324,7 @@ Need immediate assistance? Contact @ToonPaySupport"""
 
 **Ticket ID:** `#{ticket_id}`
 **Category:** {context.user_data['category']}
+**Name:** {context.user_data.get('name', user.first_name)}
 
 We'll get back to you soon.
 
@@ -333,7 +365,7 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
                 parse_mode='Markdown'
             )
             
-            # Notify super admin - FIXED: Config is now accessible here
+            # Notify super admin
             try:
                 await context.bot.send_message(
                     Config.SUPER_ADMIN_ID,
