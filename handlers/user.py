@@ -12,14 +12,15 @@ logger = logging.getLogger(__name__)
 # States
 LANGUAGE, CATEGORY, NAME, EMAIL, PHONE, QUESTION = range(6)
 
-# Ticket categories with language support
+# Ticket categories with updated names
 def get_categories(user_lang):
+    """Return categories with updated names"""
     return {
-        'technical': get_string(user_lang, 'category_technical'),
-        'payment': get_string(user_lang, 'category_payment'),
-        'account': get_string(user_lang, 'category_account'),
-        'feature': get_string(user_lang, 'category_feature'),
-        'other': get_string(user_lang, 'category_other')
+        'technical': '🛠️ Funds Missing',
+        'payment': '💰 Can\'t login to Account',
+        'account': '👤 KYC Related',
+        'feature': '✨ Card Issue',
+        'other': '❓ Other'
     }
 
 class UserHandlers:
@@ -38,6 +39,11 @@ class UserHandlers:
         # Clear any existing user data to force fresh start
         context.user_data.clear()
         
+        # Stop any ongoing conversation
+        current_conversation = context.user_data.get('conversation')
+        if current_conversation:
+            logger.info(f"Ending conversation {current_conversation} for user {user.id}")
+        
         # Always show language selection on /start
         keyboard = []
         # Create language selection buttons (2 per row)
@@ -51,7 +57,7 @@ class UserHandlers:
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            get_string(DEFAULT_LANGUAGE, 'select_language'),  # Use English as default for language selection
+            get_string(DEFAULT_LANGUAGE, 'select_language'),
             reply_markup=reply_markup
         )
         return LANGUAGE
@@ -99,7 +105,7 @@ class UserHandlers:
         user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
         
         if query.data == "new_ticket":
-            # Show categories
+            # Show categories with updated names
             categories = get_categories(user_lang)
             keyboard = []
             for key, value in categories.items():
@@ -125,7 +131,7 @@ class UserHandlers:
                         InlineKeyboardButton(get_string(user_lang, 'create_new'), callback_data="new_ticket")
                     ]])
                 )
-                return
+                return ConversationHandler.END
             
             text = f"{get_string(user_lang, 'my_tickets')}\n\n"
             for ticket in tickets[:5]:
@@ -162,7 +168,7 @@ class UserHandlers:
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
-            return
+            return ConversationHandler.END
         
         elif query.data == "help":
             help_text = get_string(user_lang, 'help')
@@ -172,7 +178,7 @@ class UserHandlers:
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
-            return
+            return ConversationHandler.END
         
         elif query.data == "cancel":
             await query.edit_message_text(
@@ -347,6 +353,11 @@ class UserHandlers:
                 )
                 
                 await update.message.reply_text(success_text, parse_mode='Markdown')
+                
+                # Clear user data after successful ticket creation
+                context.user_data.clear()
+                logger.info(f"User data cleared for {user.id} after ticket creation")
+                
             else:
                 # Ticket creation failed
                 await update.message.reply_text(
@@ -366,9 +377,10 @@ class UserHandlers:
                     )
                 except:
                     pass
+                
+                # Clear user data even on failure
+                context.user_data.clear()
             
-            # Clear user data
-            context.user_data.clear()
             return ConversationHandler.END
             
         except Exception as e:
@@ -395,6 +407,7 @@ class UserHandlers:
             except Exception as e2:
                 logger.error(f"Failed to notify super admin: {e2}")
             
+            # Clear user data on error
             context.user_data.clear()
             return ConversationHandler.END
     
