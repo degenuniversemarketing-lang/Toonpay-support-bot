@@ -108,10 +108,24 @@ class Database:
                     last_name VARCHAR(255),
                     email VARCHAR(255),
                     phone VARCHAR(20),
+                    language VARCHAR(10) DEFAULT 'en',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             logger.info("Users table created/verified")
+            
+            # Check if language column exists (for existing tables)
+            try:
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name='users' AND column_name='language'
+                """)
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE users ADD COLUMN language VARCHAR(10) DEFAULT 'en'")
+                    logger.info("Added language column to users table")
+            except Exception as e:
+                logger.error(f"Error checking/adding language column: {e}")
             
             # Admin groups table
             cursor.execute('''
@@ -133,7 +147,7 @@ class Database:
             ''')
             logger.info("Activated groups table created/verified")
             
-            # Tickets table - Make sure ticket_id is SERIAL PRIMARY KEY
+            # Tickets table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tickets (
                     ticket_id SERIAL PRIMARY KEY,
@@ -163,7 +177,7 @@ class Database:
             ''')
             logger.info("Ticket logs table created/verified")
             
-            # Custom commands table (NEW)
+            # Custom commands table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS custom_commands (
                     command VARCHAR(50) PRIMARY KEY,
@@ -281,6 +295,53 @@ class Database:
             if cursor:
                 cursor.close()
     
+    def update_user_language(self, user_id, language):
+        """Update user's language preference"""
+        if not self.conn:
+            logger.error("No database connection for update_user_language")
+            return False
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE users 
+                SET language = %s
+                WHERE user_id = %s
+                RETURNING user_id
+            ''', (language, user_id))
+            
+            result = cursor.fetchone()
+            self.conn.commit()
+            logger.info(f"Language updated to {language} for user {user_id}")
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error updating user language: {e}")
+            self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_user_language(self, user_id):
+        """Get user's language preference"""
+        if not self.conn:
+            logger.error("No database connection for get_user_language")
+            return 'en'
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT language FROM users WHERE user_id = %s', (user_id,))
+            result = cursor.fetchone()
+            return result[0] if result else 'en'
+        except Exception as e:
+            logger.error(f"Error getting user language: {e}")
+            return 'en'
+        finally:
+            if cursor:
+                cursor.close()
+    
     def get_user(self, user_id):
         """Get user by ID"""
         if not self.conn:
@@ -350,7 +411,7 @@ class Database:
                 cursor.close()
     
     def get_admin_groups(self):
-        """Get all admin groups (legacy method)"""
+        """Get all admin groups"""
         if not self.conn:
             logger.error("No database connection for get_admin_groups")
             return []
@@ -369,7 +430,7 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Activated groups methods (for /support command)
+    # Activated groups methods
     def activate_group(self, group_id, activated_by):
         """Activate a group for /support command"""
         if not self.conn:
@@ -456,7 +517,7 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Custom commands methods (NEW)
+    # Custom commands methods
     def add_custom_command(self, command, content, added_by):
         """Add a custom command"""
         if not self.conn:
@@ -545,7 +606,7 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Broadcast methods (NEW)
+    # Broadcast methods
     def get_all_users(self):
         """Get all users for broadcasting"""
         if not self.conn:
@@ -582,6 +643,7 @@ class Database:
                     u.last_name,
                     u.email,
                     u.phone,
+                    u.language,
                     u.created_at,
                     COUNT(t.ticket_id) as total_tickets,
                     SUM(CASE WHEN t.status = 'closed' THEN 1 ELSE 0 END) as solved_tickets,
@@ -589,7 +651,7 @@ class Database:
                     SUM(CASE WHEN t.status = 'spam' THEN 1 ELSE 0 END) as spam_tickets
                 FROM users u
                 LEFT JOIN tickets t ON u.user_id = t.user_id
-                GROUP BY u.user_id, u.username, u.first_name, u.last_name, u.email, u.phone, u.created_at
+                GROUP BY u.user_id, u.username, u.first_name, u.last_name, u.email, u.phone, u.language, u.created_at
                 ORDER BY u.created_at DESC
             ''')
             users = cursor.fetchall()
@@ -634,61 +696,6 @@ class Database:
                 self.conn.rollback()
                 return None
                 
-        except psycopg2.errors.UndefinedColumn as e:
-            logger.error(f"Database schema error - missing column: {e}")
-            logger.error("Attempting to fix schema...")
-            
-            # Try to fix the schema
-            try:
-                # Drop and recreate tickets table
-                cursor.execute("DROP TABLE IF EXISTS ticket_logs CASCADE")
-                cursor.execute("DROP TABLE IF EXISTS tickets CASCADE")
-                cursor.execute('''
-                    CREATE TABLE tickets (
-                        ticket_id SERIAL PRIMARY KEY,
-                        user_id BIGINT,
-                        question TEXT,
-                        admin_answer TEXT,
-                        status VARCHAR(50) DEFAULT 'pending',
-                        replied_by BIGINT,
-                        replied_by_username VARCHAR(255),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        closed_at TIMESTAMP
-                    )
-                ''')
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS ticket_logs (
-                        log_id SERIAL PRIMARY KEY,
-                        ticket_id INTEGER,
-                        action VARCHAR(50),
-                        admin_id BIGINT,
-                        admin_username VARCHAR(255),
-                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-                self.conn.commit()
-                logger.info("Schema fixed, retrying ticket creation...")
-                
-                # Retry the insert
-                cursor.execute('''
-                    INSERT INTO tickets (user_id, question, status)
-                    VALUES (%s, %s, 'pending')
-                    RETURNING ticket_id
-                ''', (user_id, question))
-                
-                result = cursor.fetchone()
-                if result:
-                    ticket_id = result[0]
-                    self.conn.commit()
-                    logger.info(f"Ticket {ticket_id} created for user {user_id} after schema fix")
-                    return ticket_id
-                    
-            except Exception as fix_error:
-                logger.error(f"Failed to fix schema: {fix_error}")
-                self.conn.rollback()
-                return None
-                
         except Exception as e:
             logger.error(f"Error creating ticket for user {user_id}: {e}")
             logger.error(traceback.format_exc())
@@ -709,7 +716,7 @@ class Database:
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
-                SELECT t.*, u.username, u.first_name, u.last_name, u.email, u.phone
+                SELECT t.*, u.username, u.first_name, u.last_name, u.email, u.phone, u.language
                 FROM tickets t
                 LEFT JOIN users u ON t.user_id = u.user_id
                 WHERE t.status IN ('pending', 'in_progress')
@@ -759,7 +766,7 @@ class Database:
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
-                SELECT t.*, u.username, u.first_name, u.last_name, u.email, u.phone
+                SELECT t.*, u.username, u.first_name, u.last_name, u.email, u.phone, u.language
                 FROM tickets t
                 LEFT JOIN users u ON t.user_id = u.user_id
                 WHERE t.ticket_id = %s
@@ -1084,9 +1091,9 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Delete old data (UPDATED to support fractional days)
+    # Delete old data
     def delete_old_data(self, days):
-        """Delete tickets older than specified days (supports fractional days)"""
+        """Delete tickets older than specified days"""
         if not self.conn:
             logger.error("No database connection for delete_old_data")
             return 0
@@ -1098,7 +1105,7 @@ class Database:
                 DELETE FROM tickets 
                 WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '%s seconds'
                 RETURNING ticket_id
-            ''', (days * 86400,))  # Convert days to seconds
+            ''', (days * 86400,))
             deleted = cursor.rowcount
             self.conn.commit()
             logger.info(f"Deleted {deleted} tickets older than {days} days")
