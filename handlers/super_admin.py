@@ -18,7 +18,8 @@ class SuperAdminHandlers:
         from config import Config
         return update.effective_user.id == Config.SUPER_ADMIN_ID
     
-    # Existing methods...
+    # ==================== GROUP MANAGEMENT ====================
+    
     async def activate_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Activate a group for /support command"""
         if not await self.is_super_admin(update):
@@ -104,6 +105,8 @@ class SuperAdminHandlers:
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
+    # ==================== DATA MANAGEMENT ====================
+    
     async def delete_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Delete old ticket data (supports days, hours, minutes)"""
         if not await self.is_super_admin(update):
@@ -147,7 +150,172 @@ class SuperAdminHandlers:
             logger.error(f"Error deleting data: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}")
     
-    # NEW: Broadcast to all groups where bot is admin
+    # ==================== CUSTOM FILTERS ====================
+    
+    async def add_filter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Add a custom command that returns a link or text"""
+        if not await self.is_super_admin(update):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "📝 **Usage:** `/addfilter <command> <link or text>`\n\n"
+                "Examples:\n"
+                "• `/addfilter presale https://t.me/presale_link`\n"
+                "• `/addfilter rules Please read our rules...`\n"
+                "• `/addfilter website https://toonpay.com`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        command = context.args[0].lower().strip('/')
+        content = ' '.join(context.args[1:])
+        
+        # Store in database
+        self.db.add_custom_command(command, content, update.effective_user.id)
+        
+        await update.message.reply_text(
+            f"✅ **Custom command added!**\n\n"
+            f"Command: `/{command}`\n"
+            f"Content: {content[:100]}{'...' if len(content) > 100 else ''}",
+            parse_mode='Markdown'
+        )
+    
+    async def remove_filter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Remove a custom command"""
+        if not await self.is_super_admin(update):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "📝 **Usage:** `/removefilter <command>`\n\n"
+                "Example: `/removefilter presale`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        command = context.args[0].lower().strip('/')
+        
+        if self.db.remove_custom_command(command):
+            await update.message.reply_text(
+                f"✅ Command `/{command}` removed successfully.",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Command `/{command}` not found.",
+                parse_mode='Markdown'
+            )
+    
+    async def list_filters(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all custom commands"""
+        if not await self.is_super_admin(update):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        commands = self.db.get_custom_commands()
+        
+        if not commands:
+            await update.message.reply_text("📭 No custom commands added yet.")
+            return
+        
+        message = "📋 **Custom Commands:**\n\n"
+        for cmd in commands:
+            message += f"• `/{cmd['command']}` - {cmd['content'][:50]}...\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    # ==================== USER BROADCAST ====================
+    
+    async def broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Send broadcast message to all users"""
+        if not await self.is_super_admin(update):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Check if replying to a message
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "📝 **Usage:** Reply to a message with `/broadcast` to send it to all users.\n\n"
+                "You can broadcast:\n"
+                "• Text messages\n"
+                "• Images with captions\n"
+                "• Videos with captions\n"
+                "• GIFs\n"
+                "• Any media type",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Get all users
+        users = self.db.get_all_users()
+        if not users:
+            await update.message.reply_text("📭 No users found to broadcast to.")
+            return
+        
+        status_msg = await update.message.reply_text(
+            f"📤 **Broadcasting to {len(users)} users...**\n"
+            f"⏳ Please wait...",
+            parse_mode='Markdown'
+        )
+        
+        success_count = 0
+        fail_count = 0
+        
+        # Get the message to broadcast
+        broadcast_msg = update.message.reply_to_message
+        
+        for user in users:
+            try:
+                if broadcast_msg.photo:
+                    await context.bot.send_photo(
+                        chat_id=user['user_id'],
+                        photo=broadcast_msg.photo[-1].file_id,
+                        caption=broadcast_msg.caption or ""
+                    )
+                elif broadcast_msg.video:
+                    await context.bot.send_video(
+                        chat_id=user['user_id'],
+                        video=broadcast_msg.video.file_id,
+                        caption=broadcast_msg.caption or ""
+                    )
+                elif broadcast_msg.animation:
+                    await context.bot.send_animation(
+                        chat_id=user['user_id'],
+                        animation=broadcast_msg.animation.file_id,
+                        caption=broadcast_msg.caption or ""
+                    )
+                elif broadcast_msg.document:
+                    await context.bot.send_document(
+                        chat_id=user['user_id'],
+                        document=broadcast_msg.document.file_id,
+                        caption=broadcast_msg.caption or ""
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=user['user_id'],
+                        text=broadcast_msg.text or "Broadcast message"
+                    )
+                success_count += 1
+            except Exception as e:
+                logger.error(f"Failed to send broadcast to user {user['user_id']}: {e}")
+                fail_count += 1
+            
+            # Small delay to avoid hitting rate limits
+            await asyncio.sleep(0.05)
+        
+        await status_msg.edit_text(
+            f"📊 **User Broadcast Complete**\n\n"
+            f"✅ Success: {success_count}\n"
+            f"❌ Failed: {fail_count}\n"
+            f"📈 Total: {len(users)}",
+            parse_mode='Markdown'
+        )
+    
+    # ==================== GROUP BROADCAST ====================
+    
     async def broadcast_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send broadcast message to all groups where bot is admin"""
         if not await self.is_super_admin(update):
@@ -247,7 +415,79 @@ class SuperAdminHandlers:
         
         await status_msg.edit_text(summary, parse_mode='Markdown')
     
-    # NEW: Broadcast to all channels where bot is admin
+    async def broadcast_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Send broadcast message to a specific group"""
+        if not await self.is_super_admin(update):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if len(context.args) < 1:
+            await update.message.reply_text(
+                "📝 **Usage:** Reply to a message with `/broadcast_group <group_id>`\n\n"
+                "Example: `/broadcast_group -100123456789`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Check if replying to a message
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "❌ Please reply to a message to broadcast.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            group_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Invalid group ID. Must be a number.")
+            return
+        
+        broadcast_msg = update.message.reply_to_message
+        
+        try:
+            if broadcast_msg.photo:
+                await context.bot.send_photo(
+                    chat_id=group_id,
+                    photo=broadcast_msg.photo[-1].file_id,
+                    caption=broadcast_msg.caption or ""
+                )
+            elif broadcast_msg.video:
+                await context.bot.send_video(
+                    chat_id=group_id,
+                    video=broadcast_msg.video.file_id,
+                    caption=broadcast_msg.caption or ""
+                )
+            elif broadcast_msg.animation:
+                await context.bot.send_animation(
+                    chat_id=group_id,
+                    animation=broadcast_msg.animation.file_id,
+                    caption=broadcast_msg.caption or ""
+                )
+            elif broadcast_msg.document:
+                await context.bot.send_document(
+                    chat_id=group_id,
+                    document=broadcast_msg.document.file_id,
+                    caption=broadcast_msg.caption or ""
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=broadcast_msg.text or "Broadcast message"
+                )
+            
+            await update.message.reply_text(
+                f"✅ Message sent successfully to group `{group_id}`.",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ Failed to send message to group `{group_id}`.\n\nError: {str(e)}",
+                parse_mode='Markdown'
+            )
+    
+    # ==================== CHANNEL BROADCAST ====================
+    
     async def broadcast_channels(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send broadcast message to all channels where bot is admin"""
         if not await self.is_super_admin(update):
@@ -344,79 +584,6 @@ class SuperAdminHandlers:
         
         await status_msg.edit_text(summary, parse_mode='Markdown')
     
-    # NEW: Broadcast to a specific group
-    async def broadcast_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send broadcast message to a specific group"""
-        if not await self.is_super_admin(update):
-            await update.message.reply_text("❌ You are not authorized to use this command.")
-            return
-        
-        if len(context.args) < 1:
-            await update.message.reply_text(
-                "📝 **Usage:** Reply to a message with `/broadcast_group <group_id>`\n\n"
-                "Example: `/broadcast_group -100123456789`",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Check if replying to a message
-        if not update.message.reply_to_message:
-            await update.message.reply_text(
-                "❌ Please reply to a message to broadcast.",
-                parse_mode='Markdown'
-            )
-            return
-        
-        try:
-            group_id = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("❌ Invalid group ID. Must be a number.")
-            return
-        
-        broadcast_msg = update.message.reply_to_message
-        
-        try:
-            if broadcast_msg.photo:
-                await context.bot.send_photo(
-                    chat_id=group_id,
-                    photo=broadcast_msg.photo[-1].file_id,
-                    caption=broadcast_msg.caption or ""
-                )
-            elif broadcast_msg.video:
-                await context.bot.send_video(
-                    chat_id=group_id,
-                    video=broadcast_msg.video.file_id,
-                    caption=broadcast_msg.caption or ""
-                )
-            elif broadcast_msg.animation:
-                await context.bot.send_animation(
-                    chat_id=group_id,
-                    animation=broadcast_msg.animation.file_id,
-                    caption=broadcast_msg.caption or ""
-                )
-            elif broadcast_msg.document:
-                await context.bot.send_document(
-                    chat_id=group_id,
-                    document=broadcast_msg.document.file_id,
-                    caption=broadcast_msg.caption or ""
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=group_id,
-                    text=broadcast_msg.text or "Broadcast message"
-                )
-            
-            await update.message.reply_text(
-                f"✅ Message sent successfully to group `{group_id}`.",
-                parse_mode='Markdown'
-            )
-        except Exception as e:
-            await update.message.reply_text(
-                f"❌ Failed to send message to group `{group_id}`.\n\nError: {str(e)}",
-                parse_mode='Markdown'
-            )
-    
-    # NEW: Broadcast to a specific channel
     async def broadcast_channel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send broadcast message to a specific channel"""
         if not await self.is_super_admin(update):
@@ -488,7 +655,8 @@ class SuperAdminHandlers:
                 parse_mode='Markdown'
             )
     
-    # NEW: Add channel to database
+    # ==================== CHANNEL MANAGEMENT ====================
+    
     async def add_channel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Add a channel to broadcast list"""
         if not await self.is_super_admin(update):
@@ -532,7 +700,6 @@ class SuperAdminHandlers:
         except ValueError:
             await update.message.reply_text("❌ Invalid channel ID. Must be a number.")
     
-    # NEW: Remove channel from database
     async def remove_channel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Remove a channel from broadcast list"""
         if not await self.is_super_admin(update):
@@ -556,7 +723,6 @@ class SuperAdminHandlers:
         except ValueError:
             await update.message.reply_text("❌ Invalid channel ID. Must be a number.")
     
-    # NEW: List all channels
     async def list_channels(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """List all channels in broadcast list"""
         if not await self.is_super_admin(update):
@@ -567,100 +733,20 @@ class SuperAdminHandlers:
         if channels:
             message = "📋 **Broadcast Channels:**\n\n"
             for channel in channels:
-                message += f"• `{channel['channel_id']}` (Added: {channel['added_at'].strftime('%Y-%m-%d')})\n"
+                added_date = channel['added_at']
+                if added_date:
+                    date_str = added_date.strftime('%Y-%m-%d')
+                else:
+                    date_str = "Unknown"
+                message += f"• `{channel['channel_id']}` (Added: {date_str})\n"
             message += f"\nTotal: {len(channels)} channels"
         else:
             message = "📭 No channels added.\n\nUse `/addchannel <channel_id>` to add one."
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
-    # Existing broadcast method (for users)
-    async def broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Send broadcast message to all users"""
-        if not await self.is_super_admin(update):
-            await update.message.reply_text("❌ You are not authorized to use this command.")
-            return
-        
-        # Check if replying to a message
-        if not update.message.reply_to_message:
-            await update.message.reply_text(
-                "📝 **Usage:** Reply to a message with `/broadcast` to send it to all users.\n\n"
-                "You can broadcast:\n"
-                "• Text messages\n"
-                "• Images with captions\n"
-                "• Videos with captions\n"
-                "• GIFs\n"
-                "• Any media type",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Get all users
-        users = self.db.get_all_users()
-        if not users:
-            await update.message.reply_text("📭 No users found to broadcast to.")
-            return
-        
-        status_msg = await update.message.reply_text(
-            f"📤 **Broadcasting to {len(users)} users...**\n"
-            f"⏳ Please wait...",
-            parse_mode='Markdown'
-        )
-        
-        success_count = 0
-        fail_count = 0
-        
-        # Get the message to broadcast
-        broadcast_msg = update.message.reply_to_message
-        
-        for user in users:
-            try:
-                if broadcast_msg.photo:
-                    await context.bot.send_photo(
-                        chat_id=user['user_id'],
-                        photo=broadcast_msg.photo[-1].file_id,
-                        caption=broadcast_msg.caption or ""
-                    )
-                elif broadcast_msg.video:
-                    await context.bot.send_video(
-                        chat_id=user['user_id'],
-                        video=broadcast_msg.video.file_id,
-                        caption=broadcast_msg.caption or ""
-                    )
-                elif broadcast_msg.animation:
-                    await context.bot.send_animation(
-                        chat_id=user['user_id'],
-                        animation=broadcast_msg.animation.file_id,
-                        caption=broadcast_msg.caption or ""
-                    )
-                elif broadcast_msg.document:
-                    await context.bot.send_document(
-                        chat_id=user['user_id'],
-                        document=broadcast_msg.document.file_id,
-                        caption=broadcast_msg.caption or ""
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=user['user_id'],
-                        text=broadcast_msg.text or "Broadcast message"
-                    )
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send broadcast to user {user['user_id']}: {e}")
-                fail_count += 1
-            
-            # Small delay to avoid hitting rate limits
-            await asyncio.sleep(0.05)
-        
-        await status_msg.edit_text(
-            f"📊 **User Broadcast Complete**\n\n"
-            f"✅ Success: {success_count}\n"
-            f"❌ Failed: {fail_count}\n"
-            f"📈 Total: {len(users)}",
-            parse_mode='Markdown'
-        )
+    # ==================== COMPLETE STATISTICS (FIXED) ====================
     
-    # Existing all_stats method
     async def all_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get comprehensive statistics about all users"""
         if not await self.is_super_admin(update):
@@ -706,11 +792,18 @@ class SuperAdminHandlers:
             # Send users in batches to avoid message too long error
             batch = ""
             for user in users_stats:
+                # Handle None created_at - FIXED HERE
+                created_date = user['created_at']
+                if created_date:
+                    date_str = created_date.strftime('%Y-%m-%d %H:%M')
+                else:
+                    date_str = "Unknown"
+                
                 user_info = f"""**Name:** {user['name']}
 **Username:** @{user['username'] or 'N/A'}
 **User ID:** `{user['user_id']}`
 **Language:** {user.get('language', 'en')}
-**Registered:** {user['created_at'].strftime('%Y-%m-%d %H:%M')}
+**Registered:** {date_str}
 **Status:** {'✅ Active' if user['total_tickets'] > 0 else '📭 Inactive'}
 **Tickets:** Total: {user['total_tickets']} | ✅ Solved: {user['solved_tickets']} | 🔄 In Progress: {user['in_progress_tickets']} | 🚫 Spam: {user['spam_tickets']}
 ─────────────────────
@@ -726,79 +819,3 @@ class SuperAdminHandlers:
                 await update.message.reply_text(batch, parse_mode='Markdown')
         else:
             await update.message.reply_text("📭 No users found.")
-    
-    # Custom filter methods
-    async def add_filter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Add a custom command that returns a link or text"""
-        if not await self.is_super_admin(update):
-            await update.message.reply_text("❌ You are not authorized to use this command.")
-            return
-        
-        if len(context.args) < 2:
-            await update.message.reply_text(
-                "📝 **Usage:** `/addfilter <command> <link or text>`\n\n"
-                "Examples:\n"
-                "• `/addfilter presale https://t.me/presale_link`\n"
-                "• `/addfilter rules Please read our rules...`\n"
-                "• `/addfilter website https://toonpay.com`",
-                parse_mode='Markdown'
-            )
-            return
-        
-        command = context.args[0].lower().strip('/')
-        content = ' '.join(context.args[1:])
-        
-        # Store in database
-        self.db.add_custom_command(command, content, update.effective_user.id)
-        
-        await update.message.reply_text(
-            f"✅ **Custom command added!**\n\n"
-            f"Command: `/{command}`\n"
-            f"Content: {content[:100]}{'...' if len(content) > 100 else ''}",
-            parse_mode='Markdown'
-        )
-    
-    async def remove_filter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Remove a custom command"""
-        if not await self.is_super_admin(update):
-            await update.message.reply_text("❌ You are not authorized to use this command.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text(
-                "📝 **Usage:** `/removefilter <command>`\n\n"
-                "Example: `/removefilter presale`",
-                parse_mode='Markdown'
-            )
-            return
-        
-        command = context.args[0].lower().strip('/')
-        
-        if self.db.remove_custom_command(command):
-            await update.message.reply_text(
-                f"✅ Command `/{command}` removed successfully.",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Command `/{command}` not found.",
-                parse_mode='Markdown'
-            )
-    
-    async def list_filters(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """List all custom commands"""
-        if not await self.is_super_admin(update):
-            await update.message.reply_text("❌ You are not authorized to use this command.")
-            return
-        
-        commands = self.db.get_custom_commands()
-        
-        if not commands:
-            await update.message.reply_text("📭 No custom commands added yet.")
-            return
-        
-        message = "📋 **Custom Commands:**\n\n"
-        for cmd in commands:
-            message += f"• `/{cmd['command']}` - {cmd['content'][:50]}...\n"
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
