@@ -15,6 +15,7 @@ class Database:
         if self.conn:
             self.fix_schema()
             self.create_tables()
+            self.fix_null_created_at()  # Fix any NULL created_at values
     
     def connect(self):
         """Establish database connection"""
@@ -215,6 +216,34 @@ class Database:
             if self.conn:
                 self.conn.rollback()
             return False
+        finally:
+            if cursor:
+                cursor.close()
+    
+    # ==================== FIX NULL VALUES ====================
+    
+    def fix_null_created_at(self):
+        """Fix NULL created_at values in users table"""
+        if not self.conn:
+            return 0
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE users 
+                SET created_at = CURRENT_TIMESTAMP 
+                WHERE created_at IS NULL
+            ''')
+            updated = cursor.rowcount
+            self.conn.commit()
+            if updated > 0:
+                logger.info(f"✅ Fixed {updated} users with NULL created_at")
+            return updated
+        except Exception as e:
+            logger.error(f"Error fixing NULL created_at: {e}")
+            self.conn.rollback()
+            return 0
         finally:
             if cursor:
                 cursor.close()
@@ -530,7 +559,7 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # ==================== CHANNELS METHODS (NEW) ====================
+    # ==================== CHANNELS METHODS ====================
     
     def add_channel(self, channel_id, added_by):
         """Add a channel to broadcast list"""
