@@ -13,10 +13,10 @@ CATEGORY, NAME, EMAIL, PHONE, QUESTION = range(5)
 
 # Ticket categories
 CATEGORIES = {
-    'technical': '🛠️ Technical Issue',
-    'payment': '💰 Payment Problem',
-    'account': '👤 Account Issue',
-    'feature': '✨ Feature Request',
+    'technical': '🛠️ Can't login to Account',
+    'payment': '💰 Funds Missing',
+    'account': '👤 KYC Related',
+    'feature': '💳Card Issue',
     'other': '❓ Other'
 }
 
