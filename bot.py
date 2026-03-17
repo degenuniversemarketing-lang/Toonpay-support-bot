@@ -2,6 +2,8 @@ import logging
 import sys
 import os
 import traceback
+import asyncio
+import requests
 from pathlib import Path
 
 # Add current directory to path
@@ -62,8 +64,31 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Failed to send error to super admin: {e}")
 
+async def remove_persistent_menu(application: Application):
+    """Remove persistent menu buttons and commands"""
+    try:
+        # Remove the menu button (the buttons at bottom)
+        await application.bot.set_chat_menu_button(
+            chat_id=None,  # None means default for all users
+            menu_button={"type": "default"}  # This removes custom button
+        )
+        
+        # Clear all commands (removes /command suggestions)
+        await application.bot.delete_my_commands(scope={"type": "default"})
+        await application.bot.delete_my_commands(scope={"type": "all_private_chats"})
+        await application.bot.delete_my_commands(scope={"type": "all_group_chats"})
+        
+        logger.info("✅ Persistent menu and commands removed successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to remove menu: {e}")
+        return False
+
 async def post_init(application: Application) -> None:
     """Run after bot initialization"""
+    # Remove persistent menu buttons first
+    await remove_persistent_menu(application)
+    
     # Test admin group connection
     try:
         await application.bot.send_message(
@@ -87,6 +112,14 @@ async def post_init(application: Application) -> None:
 def main():
     """Start the bot."""
     try:
+        # Delete any existing webhook first
+        webhook_url = f"https://api.telegram.org/bot{Config.BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+        response = requests.post(webhook_url)
+        if response.status_code == 200:
+            logger.info("✅ Webhook deleted via direct API call")
+        else:
+            logger.warning(f"⚠️ Webhook deletion returned: {response.text}")
+        
         # Initialize database
         logger.info("Initializing database...")
         db = Database()
@@ -108,7 +141,7 @@ def main():
         # Add error handler
         application.add_error_handler(error_handler)
         
-        # User conversation handler for ticket creation (with LANGUAGE state)
+        # User conversation handler for ticket creation
         conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler('start', user_handlers.start),
@@ -154,19 +187,36 @@ def main():
         # Group support command
         application.add_handler(CommandHandler('support', group_handlers.support))
         
-        # Super admin commands
+        # SUPER ADMIN COMMANDS - Group Management
         application.add_handler(CommandHandler('activate', super_admin_handlers.activate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deactivate', super_admin_handlers.deactivate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
+        
+        # SUPER ADMIN COMMANDS - Data Management
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
         
-        # Super admin custom commands
+        # SUPER ADMIN COMMANDS - Custom Filters
         application.add_handler(CommandHandler('addfilter', super_admin_handlers.add_filter, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('removefilter', super_admin_handlers.remove_filter, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listfilters', super_admin_handlers.list_filters, filters=filters.ChatType.PRIVATE))
         
-        # Super admin broadcast and stats
+        # SUPER ADMIN COMMANDS - User Broadcast
         application.add_handler(CommandHandler('broadcast', super_admin_handlers.broadcast, filters=filters.ChatType.PRIVATE))
+        
+        # SUPER ADMIN COMMANDS - Group Broadcast (NEW)
+        application.add_handler(CommandHandler('broadcast_groups', super_admin_handlers.broadcast_groups, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('broadcast_group', super_admin_handlers.broadcast_group, filters=filters.ChatType.PRIVATE))
+        
+        # SUPER ADMIN COMMANDS - Channel Broadcast (NEW)
+        application.add_handler(CommandHandler('broadcast_channels', super_admin_handlers.broadcast_channels, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('broadcast_channel', super_admin_handlers.broadcast_channel, filters=filters.ChatType.PRIVATE))
+        
+        # SUPER ADMIN COMMANDS - Channel Management (NEW)
+        application.add_handler(CommandHandler('addchannel', super_admin_handlers.add_channel, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('removechannel', super_admin_handlers.remove_channel, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('listchannels', super_admin_handlers.list_channels, filters=filters.ChatType.PRIVATE))
+        
+        # SUPER ADMIN COMMANDS - Statistics
         application.add_handler(CommandHandler('allstats', super_admin_handlers.all_stats, filters=filters.ChatType.PRIVATE))
         
         # Custom commands handler (must be last - low priority)
@@ -177,14 +227,13 @@ def main():
         
         # Start bot
         logger.info("Bot started successfully!")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
         
     except Exception as e:
         logger.error(f"Fatal error starting bot: {e}")
         logger.error(traceback.format_exc())
         # Try to notify super admin via raw request
         try:
-            import requests
             requests.post(
                 f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage",
                 json={
