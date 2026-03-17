@@ -27,7 +27,7 @@ class UserHandlers:
         self.db = db
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command - First show language selection"""
+        """Handle /start command - Always show language selection first"""
         # Only work in private chat
         if update.effective_chat.type != 'private':
             return
@@ -35,47 +35,26 @@ class UserHandlers:
         user = update.effective_user
         self.db.add_user(user.id, user.username, user.first_name, user.last_name)
         
-        # Check if user already selected language
-        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
+        # Clear any existing user data to force fresh start
+        context.user_data.clear()
         
-        # If language not set, show language selection
-        if 'language' not in context.user_data:
-            keyboard = []
-            # Create language selection buttons (2 per row)
-            lang_items = list(LANGUAGES.items())
-            for i in range(0, len(lang_items), 2):
-                row = []
-                row.append(InlineKeyboardButton(lang_items[i][1], callback_data=f"lang_{lang_items[i][0]}"))
-                if i+1 < len(lang_items):
-                    row.append(InlineKeyboardButton(lang_items[i+1][1], callback_data=f"lang_{lang_items[i+1][0]}"))
-                keyboard.append(row)
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                get_string(user_lang, 'select_language'),
-                reply_markup=reply_markup
-            )
-            return LANGUAGE
+        # Always show language selection on /start
+        keyboard = []
+        # Create language selection buttons (2 per row)
+        lang_items = list(LANGUAGES.items())
+        for i in range(0, len(lang_items), 2):
+            row = []
+            row.append(InlineKeyboardButton(lang_items[i][1], callback_data=f"lang_{lang_items[i][0]}"))
+            if i+1 < len(lang_items):
+                row.append(InlineKeyboardButton(lang_items[i+1][1], callback_data=f"lang_{lang_items[i+1][0]}"))
+            keyboard.append(row)
         
-        # If language already set, show main menu
-        await self.show_main_menu(update, context, user_lang)
-    
-    async def show_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_lang):
-        """Show main menu with buttons"""
-        welcome_text = get_string(user_lang, 'welcome')
-        
-        keyboard = [
-            [InlineKeyboardButton(get_string(user_lang, 'new_ticket'), callback_data="new_ticket")],
-            [InlineKeyboardButton(get_string(user_lang, 'my_tickets_btn'), callback_data="my_tickets"),
-             InlineKeyboardButton(get_string(user_lang, 'help_btn'), callback_data="help")]
-        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await update.message.reply_text(
-            welcome_text,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
+            get_string(DEFAULT_LANGUAGE, 'select_language'),  # Use English as default for language selection
+            reply_markup=reply_markup
         )
+        return LANGUAGE
     
     async def language_selected(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle language selection"""
@@ -84,6 +63,10 @@ class UserHandlers:
         
         lang_code = query.data.replace('lang_', '')
         context.user_data['language'] = lang_code
+        
+        # Save language preference to database
+        user_id = update.effective_user.id
+        self.db.update_user_language(user_id, lang_code)
         
         # Show confirmation and main menu
         await query.edit_message_text(
