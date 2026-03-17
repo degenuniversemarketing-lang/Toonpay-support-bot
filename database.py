@@ -137,7 +137,7 @@ class Database:
             ''')
             logger.info("Admin groups table created/verified")
             
-            # Activated groups table
+            # Activated groups table (for /support command)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS activated_groups (
                     group_id BIGINT PRIMARY KEY,
@@ -146,6 +146,16 @@ class Database:
                 )
             ''')
             logger.info("Activated groups table created/verified")
+            
+            # Channels table (for broadcast to channels)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS channels (
+                    channel_id BIGINT PRIMARY KEY,
+                    added_by BIGINT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            logger.info("Channels table created/verified")
             
             # Tickets table
             cursor.execute('''
@@ -209,7 +219,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # User methods
+    # ==================== USER METHODS ====================
+    
     def add_user(self, user_id, username, first_name, last_name=None):
         """Add or update a user"""
         if not self.conn:
@@ -361,7 +372,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Admin groups methods
+    # ==================== ADMIN GROUPS METHODS ====================
+    
     def add_admin_group(self, group_id, added_by):
         """Add an admin group"""
         if not self.conn:
@@ -430,7 +442,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Activated groups methods
+    # ==================== ACTIVATED GROUPS METHODS ====================
+    
     def activate_group(self, group_id, activated_by):
         """Activate a group for /support command"""
         if not self.conn:
@@ -517,7 +530,77 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Custom commands methods
+    # ==================== CHANNELS METHODS (NEW) ====================
+    
+    def add_channel(self, channel_id, added_by):
+        """Add a channel to broadcast list"""
+        if not self.conn:
+            logger.error("No database connection for add_channel")
+            return False
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO channels (channel_id, added_by)
+                VALUES (%s, %s)
+                ON CONFLICT (channel_id) DO NOTHING
+                RETURNING channel_id
+            ''', (channel_id, added_by))
+            
+            result = cursor.fetchone()
+            self.conn.commit()
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error adding channel {channel_id}: {e}")
+            self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+
+    def remove_channel(self, channel_id):
+        """Remove a channel from broadcast list"""
+        if not self.conn:
+            logger.error("No database connection for remove_channel")
+            return False
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM channels WHERE channel_id = %s', (channel_id,))
+            deleted = cursor.rowcount
+            self.conn.commit()
+            return deleted > 0
+        except Exception as e:
+            logger.error(f"Error removing channel {channel_id}: {e}")
+            self.conn.rollback()
+            return False
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_all_channels(self):
+        """Get all channels for broadcasting"""
+        if not self.conn:
+            logger.error("No database connection for get_all_channels")
+            return []
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT * FROM channels ORDER BY added_at DESC')
+            channels = cursor.fetchall()
+            return channels
+        except Exception as e:
+            logger.error(f"Error getting channels: {e}")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+    
+    # ==================== CUSTOM COMMANDS METHODS ====================
+    
     def add_custom_command(self, command, content, added_by):
         """Add a custom command"""
         if not self.conn:
@@ -606,7 +689,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Broadcast methods
+    # ==================== BROADCAST METHODS ====================
+    
     def get_all_users(self):
         """Get all users for broadcasting"""
         if not self.conn:
@@ -668,7 +752,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Ticket methods
+    # ==================== TICKET METHODS ====================
+    
     def create_ticket(self, user_id, question):
         """Create a new ticket"""
         if not self.conn:
@@ -886,7 +971,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Statistics
+    # ==================== STATISTICS METHODS ====================
+    
     def get_stats(self):
         """Get bot statistics"""
         if not self.conn:
@@ -958,7 +1044,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Search
+    # ==================== SEARCH METHODS ====================
+    
     def search_user(self, query):
         """Search users by various fields"""
         if not self.conn:
@@ -995,7 +1082,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Export data
+    # ==================== EXPORT METHODS ====================
+    
     def export_all_tickets(self):
         """Export all tickets for Excel download"""
         if not self.conn:
@@ -1067,7 +1155,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Ticket logs
+    # ==================== TICKET LOGS METHODS ====================
+    
     def get_ticket_logs(self, ticket_id):
         """Get logs for a specific ticket"""
         if not self.conn:
@@ -1091,7 +1180,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Delete old data
+    # ==================== DELETE OLD DATA ====================
+    
     def delete_old_data(self, days):
         """Delete tickets older than specified days"""
         if not self.conn:
@@ -1119,7 +1209,8 @@ class Database:
             if cursor:
                 cursor.close()
     
-    # Health check
+    # ==================== HEALTH CHECK ====================
+    
     def check_connection(self):
         """Check if database connection is alive"""
         if not self.conn:
