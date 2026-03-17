@@ -2,6 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from database import Database
 from utils.validators import validate_email, validate_phone, sanitize_input
+from utils.languages import LANGUAGES, get_string, DEFAULT_LANGUAGE
 from config import Config
 import logging
 import traceback
@@ -9,23 +10,24 @@ import traceback
 logger = logging.getLogger(__name__)
 
 # States
-CATEGORY, NAME, EMAIL, PHONE, QUESTION = range(5)
+LANGUAGE, CATEGORY, NAME, EMAIL, PHONE, QUESTION = range(6)
 
-# Ticket categories
-CATEGORIES = {
-    'technical': '🛠️ Can't login to Account',
-    'payment': '💰 Funds Missing',
-    'account': '👤 KYC Related',
-    'feature': '💳Card Issue',
-    'other': '❓ Other'
-}
+# Ticket categories with language support
+def get_categories(user_lang):
+    return {
+        'technical': get_string(user_lang, 'category_technical'),
+        'payment': get_string(user_lang, 'category_payment'),
+        'account': get_string(user_lang, 'category_account'),
+        'feature': get_string(user_lang, 'category_feature'),
+        'other': get_string(user_lang, 'category_other')
+    }
 
 class UserHandlers:
     def __init__(self, db: Database):
         self.db = db
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command with enhanced UI"""
+        """Handle /start command - First show language selection"""
         # Only work in private chat
         if update.effective_chat.type != 'private':
             return
@@ -33,27 +35,39 @@ class UserHandlers:
         user = update.effective_user
         self.db.add_user(user.id, user.username, user.first_name, user.last_name)
         
-        welcome_text = """🎫 **Welcome to ToonPay Support Bot!**
-
-I'm here to help you with any issues you might have.
-
-**How to create a ticket:**
-1️⃣ Click 'New Ticket'
-2️⃣ Select your issue category
-3️⃣ Provide your name
-4️⃣ Provide your email
-5️⃣ Provide your phone number
-6️⃣ Describe your issue
-7️⃣ Submit
-
-⏱️ **ToonPay Support Available 24/7**
-
-Click the button below to start!"""
+        # Check if user already selected language
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
+        
+        # If language not set, show language selection
+        if 'language' not in context.user_data:
+            keyboard = []
+            # Create language selection buttons (2 per row)
+            lang_items = list(LANGUAGES.items())
+            for i in range(0, len(lang_items), 2):
+                row = []
+                row.append(InlineKeyboardButton(lang_items[i][1], callback_data=f"lang_{lang_items[i][0]}"))
+                if i+1 < len(lang_items):
+                    row.append(InlineKeyboardButton(lang_items[i+1][1], callback_data=f"lang_{lang_items[i+1][0]}"))
+                keyboard.append(row)
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                get_string(user_lang, 'select_language'),
+                reply_markup=reply_markup
+            )
+            return LANGUAGE
+        
+        # If language already set, show main menu
+        await self.show_main_menu(update, context, user_lang)
+    
+    async def show_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_lang):
+        """Show main menu with buttons"""
+        welcome_text = get_string(user_lang, 'welcome')
         
         keyboard = [
-            [InlineKeyboardButton("📝 New Ticket", callback_data="new_ticket")],
-            [InlineKeyboardButton("📋 My Tickets", callback_data="my_tickets"),
-             InlineKeyboardButton("❓ Help", callback_data="help")]
+            [InlineKeyboardButton(get_string(user_lang, 'new_ticket'), callback_data="new_ticket")],
+            [InlineKeyboardButton(get_string(user_lang, 'my_tickets_btn'), callback_data="my_tickets"),
+             InlineKeyboardButton(get_string(user_lang, 'help_btn'), callback_data="help")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -63,21 +77,55 @@ Click the button below to start!"""
             parse_mode='Markdown'
         )
     
+    async def language_selected(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle language selection"""
+        query = update.callback_query
+        await query.answer()
+        
+        lang_code = query.data.replace('lang_', '')
+        context.user_data['language'] = lang_code
+        
+        # Show confirmation and main menu
+        await query.edit_message_text(
+            get_string(lang_code, 'language_changed')
+        )
+        
+        # Send main menu
+        welcome_text = get_string(lang_code, 'welcome')
+        keyboard = [
+            [InlineKeyboardButton(get_string(lang_code, 'new_ticket'), callback_data="new_ticket")],
+            [InlineKeyboardButton(get_string(lang_code, 'my_tickets_btn'), callback_data="my_tickets"),
+             InlineKeyboardButton(get_string(lang_code, 'help_btn'), callback_data="help")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=welcome_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+        return ConversationHandler.END
+    
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline button presses"""
         query = update.callback_query
         await query.answer()
         
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
+        
         if query.data == "new_ticket":
             # Show categories
+            categories = get_categories(user_lang)
             keyboard = []
-            for key, value in CATEGORIES.items():
+            for key, value in categories.items():
                 keyboard.append([InlineKeyboardButton(value, callback_data=f"cat_{key}")])
-            keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel")])
+            keyboard.append([InlineKeyboardButton(get_string(user_lang, 'cancel_btn'), callback_data="cancel")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
-                "📋 **Select your issue category:**",
+                get_string(user_lang, 'select_category'),
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
@@ -89,15 +137,15 @@ Click the button below to start!"""
             
             if not tickets:
                 await query.edit_message_text(
-                    "📭 You don't have any tickets yet.",
+                    get_string(user_lang, 'no_tickets'),
                     reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("📝 Create New Ticket", callback_data="new_ticket")
+                        InlineKeyboardButton(get_string(user_lang, 'create_new'), callback_data="new_ticket")
                     ]])
                 )
                 return
             
-            text = "📋 **Your Tickets:**\n\n"
-            for ticket in tickets[:5]:  # Show last 5 tickets
+            text = f"{get_string(user_lang, 'my_tickets')}\n\n"
+            for ticket in tickets[:5]:
                 status_emoji = {
                     'pending': '⏳',
                     'in_progress': '🔄',
@@ -105,19 +153,26 @@ Click the button below to start!"""
                     'spam': '🚫'
                 }.get(ticket['status'], '❓')
                 
+                status_text = {
+                    'pending': get_string(user_lang, 'status_pending'),
+                    'in_progress': get_string(user_lang, 'status_in_progress'),
+                    'closed': get_string(user_lang, 'status_closed'),
+                    'spam': get_string(user_lang, 'status_spam')
+                }.get(ticket['status'], ticket['status'])
+                
                 text += f"{status_emoji} **Ticket #{ticket['ticket_id']}**\n"
-                text += f"Status: {ticket['status'].title()}\n"
-                text += f"Date: {ticket['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
+                text += f"{status_text}\n"
+                text += f"📅 {ticket['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
                 if ticket['admin_answer']:
-                    text += f"Reply: {ticket['admin_answer'][:50]}...\n"
+                    text += f"💬 {ticket['admin_answer'][:50]}...\n"
                 text += "─" * 20 + "\n"
             
             if len(tickets) > 5:
                 text += f"\n... and {len(tickets) - 5} more tickets"
             
-            keyboard = [[InlineKeyboardButton("📝 New Ticket", callback_data="new_ticket")]]
+            keyboard = [[InlineKeyboardButton(get_string(user_lang, 'create_new'), callback_data="new_ticket")]]
             if tickets:
-                keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="my_tickets")])
+                keyboard.append([InlineKeyboardButton(get_string(user_lang, 'refresh'), callback_data="my_tickets")])
             
             await query.edit_message_text(
                 text,
@@ -127,28 +182,8 @@ Click the button below to start!"""
             return
         
         elif query.data == "help":
-            help_text = """ℹ️ **Help & Support**
-
-**How to create a ticket:**
-1. Click "New Ticket"
-2. Select category
-3. Provide your full name
-4. Provide your email address
-5. Provide your phone number
-6. Describe your issue
-7. Submit
-
-**Important Notes:**
-• Each ticket is for one issue only
-• Tickets close after admin reply
-• Create new ticket for new questions
-• Your details are saved for faster support
-
-⏱️ **ToonPay Support Available 24/7**
-
-Need immediate assistance? Contact @ToonPaySupport"""
-            
-            keyboard = [[InlineKeyboardButton("📝 New Ticket", callback_data="new_ticket")]]
+            help_text = get_string(user_lang, 'help')
+            keyboard = [[InlineKeyboardButton(get_string(user_lang, 'new_ticket'), callback_data="new_ticket")]]
             await query.edit_message_text(
                 help_text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -158,9 +193,9 @@ Need immediate assistance? Contact @ToonPaySupport"""
         
         elif query.data == "cancel":
             await query.edit_message_text(
-                "❌ Operation cancelled.",
+                get_string(user_lang, 'cancel'),
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📝 New Ticket", callback_data="new_ticket")
+                    InlineKeyboardButton(get_string(user_lang, 'new_ticket'), callback_data="new_ticket")
                 ]])
             )
             context.user_data.clear()
@@ -171,12 +206,16 @@ Need immediate assistance? Contact @ToonPaySupport"""
         query = update.callback_query
         await query.answer()
         
-        category = query.data.replace('cat_', '')
-        context.user_data['category'] = CATEGORIES.get(category, 'Other')
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
+        categories = get_categories(user_lang)
+        
+        category_key = query.data.replace('cat_', '')
+        category_value = categories.get(category_key, get_string(user_lang, 'category_other'))
+        context.user_data['category'] = category_value
+        context.user_data['category_key'] = category_key
         
         await query.edit_message_text(
-            "👤 **Please enter your full name:**\n\n"
-            "Example: `John Doe`",
+            get_string(user_lang, 'ask_name'),
             parse_mode='Markdown'
         )
         return NAME
@@ -184,6 +223,7 @@ Need immediate assistance? Contact @ToonPaySupport"""
     async def get_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get and validate name"""
         name = sanitize_input(update.message.text.strip())
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
         
         if len(name) < 2:
             await update.message.reply_text(
@@ -195,9 +235,7 @@ Need immediate assistance? Contact @ToonPaySupport"""
         
         context.user_data['name'] = name
         await update.message.reply_text(
-            "✅ **Name saved!**\n\n"
-            "📧 **Now enter your email address:**\n\n"
-            "Example: `user@example.com`",
+            get_string(user_lang, 'name_saved') + "\n\n" + get_string(user_lang, 'ask_email'),
             parse_mode='Markdown'
         )
         return EMAIL
@@ -205,21 +243,18 @@ Need immediate assistance? Contact @ToonPaySupport"""
     async def get_email(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get and validate email"""
         email = update.message.text.strip()
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
         
         if not validate_email(email):
             await update.message.reply_text(
-                "❌ **Invalid email format!**\n\n"
-                "Please send a valid email address.\n"
-                "Example: `user@example.com`",
+                get_string(user_lang, 'invalid_email'),
                 parse_mode='Markdown'
             )
             return EMAIL
         
         context.user_data['email'] = email
         await update.message.reply_text(
-            "✅ **Email saved!**\n\n"
-            "📞 **Now send your phone number:**\n\n"
-            "Example: `+1234567890` or `1234567890`",
+            get_string(user_lang, 'email_saved') + "\n\n" + get_string(user_lang, 'ask_phone'),
             parse_mode='Markdown'
         )
         return PHONE
@@ -227,24 +262,18 @@ Need immediate assistance? Contact @ToonPaySupport"""
     async def get_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Get and validate phone"""
         phone = update.message.text.strip()
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
         
         if not validate_phone(phone):
             await update.message.reply_text(
-                "❌ **Invalid phone number!**\n\n"
-                "Please send a valid phone number (10-15 digits).\n"
-                "Example: `+1234567890` or `1234567890`",
+                get_string(user_lang, 'invalid_phone'),
                 parse_mode='Markdown'
             )
             return PHONE
         
         context.user_data['phone'] = phone
         await update.message.reply_text(
-            "✅ **Phone saved!**\n\n"
-            "📝 **Now describe your issue in detail:**\n\n"
-            "Please include:\n"
-            "• What happened?\n"
-            "• When did it happen?\n"
-            "• Any error messages?",
+            get_string(user_lang, 'phone_saved') + "\n\n" + get_string(user_lang, 'ask_question'),
             parse_mode='Markdown'
         )
         return QUESTION
@@ -254,6 +283,7 @@ Need immediate assistance? Contact @ToonPaySupport"""
         try:
             question = sanitize_input(update.message.text)
             user = update.effective_user
+            user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
             
             if not question:
                 await update.message.reply_text(
@@ -271,18 +301,23 @@ Need immediate assistance? Contact @ToonPaySupport"""
                 context.user_data.get('name', user.first_name)
             )
             
+            # Save user's language preference to database
+            self.db.update_user_language(user.id, user_lang)
+            
             # Create ticket with category
-            full_question = f"[{context.user_data['category']}]\n\n{question}"
+            category_display = context.user_data['category']
+            full_question = f"[{category_display}]\n\n{question}"
             ticket_id = self.db.create_ticket(user.id, full_question)
             
             if ticket_id:
-                # Notify admin group
+                # Notify admin group (always in English for admins)
                 ticket_info = (
                     f"🎫 **New Ticket #{ticket_id}**\n\n"
-                    f"**Category:** {context.user_data['category']}\n"
+                    f"**Category:** {category_display}\n"
                     f"**Name:** {context.user_data.get('name', user.first_name)}\n"
                     f"**From:** @{user.username or 'N/A'}\n"
                     f"**User ID:** `{user.id}`\n"
+                    f"**Language:** {LANGUAGES.get(user_lang, 'English')}\n"
                     f"**Email:** `{context.user_data['email']}`\n"
                     f"**Phone:** `{context.user_data['phone']}`\n\n"
                     f"**Question:**\n{question}"
@@ -319,23 +354,20 @@ Need immediate assistance? Contact @ToonPaySupport"""
                     except:
                         pass
                 
-                # Confirm to user
-                success_text = f"""✅ **Your ticket has been created!**
-
-**Ticket ID:** `#{ticket_id}`
-**Category:** {context.user_data['category']}
-**Name:** {context.user_data.get('name', user.first_name)}
-
-We'll get back to you soon.
-
-You can check your ticket status using /start and clicking 'My Tickets'."""
+                # Confirm to user in their language
+                success_text = get_string(
+                    user_lang, 
+                    'ticket_created',
+                    ticket_id=ticket_id,
+                    category=category_display,
+                    name=context.user_data.get('name', user.first_name)
+                )
                 
                 await update.message.reply_text(success_text, parse_mode='Markdown')
             else:
                 # Ticket creation failed
                 await update.message.reply_text(
-                    "❌ **Failed to create ticket.**\n\n"
-                    "Please try again later or contact @ToonPaySupport",
+                    get_string(user_lang, 'ticket_failed'),
                     parse_mode='Markdown'
                 )
                 # Notify super admin
@@ -345,6 +377,7 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
                         f"🚨 **Ticket Creation Failed**\n\n"
                         f"User: @{user.username} (ID: {user.id})\n"
                         f"Category: {context.user_data['category']}\n"
+                        f"Language: {user_lang}\n"
                         f"Error: Database returned None",
                         parse_mode='Markdown'
                     )
@@ -359,9 +392,10 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
             logger.error(f"Error in ticket creation: {e}")
             logger.error(traceback.format_exc())
             
+            user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
+            
             await update.message.reply_text(
-                "❌ **An error occurred while creating your ticket.**\n\n"
-                "Please try again later or contact @ToonPaySupport",
+                get_string(user_lang, 'ticket_error'),
                 parse_mode='Markdown'
             )
             
@@ -381,10 +415,10 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
             context.user_data.clear()
             return ConversationHandler.END
     
-    # NEW: Custom command handler for user commands
     async def custom_command_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle custom commands added by super admin"""
-        command = update.message.text.split()[0][1:].lower()  # Remove / and get command
+        command = update.message.text.split()[0][1:].lower()
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
         
         # Skip built-in commands
         built_in = ['start', 'new', 'cancel', 'support', 'pending', 'stats', 
@@ -393,39 +427,36 @@ You can check your ticket status using /start and clicking 'My Tickets'."""
                    'addfilter', 'removefilter', 'listfilters', 'broadcast', 'allstats']
         
         if command in built_in:
-            return False  # Let built-in handlers process it
+            return False
         
         # Get custom command from database
         cmd_data = self.db.get_custom_command(command)
         
         if cmd_data:
             content = cmd_data['content']
-            # Check if content is a link (starts with http)
+            # Check if content is a link
             if content.startswith(('http://', 'https://', 't.me/', 'www.')):
-                # Add http if missing
                 if content.startswith('t.me/'):
                     content = 'https://' + content
                 elif content.startswith('www.'):
                     content = 'https://' + content
                 
-                # Send as button
-                keyboard = [[InlineKeyboardButton("🔗 Click Here", url=content)]]
+                keyboard = [[InlineKeyboardButton(get_string(user_lang, 'click_here'), url=content)]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
-                    f"Here's your requested link:",
+                    get_string(user_lang, 'here_link'),
                     reply_markup=reply_markup
                 )
             else:
-                # Send as text
                 await update.message.reply_text(content)
             return True
         return False
     
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel the conversation"""
+        user_lang = context.user_data.get('language', DEFAULT_LANGUAGE)
         await update.message.reply_text(
-            "❌ **Ticket creation cancelled.**\n\n"
-            "You can start again anytime with /start",
+            get_string(user_lang, 'cancel'),
             parse_mode='Markdown'
         )
         context.user_data.clear()
