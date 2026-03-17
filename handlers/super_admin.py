@@ -32,8 +32,7 @@ class SuperAdminHandlers:
                 "Get group ID by:\n"
                 "1. Add @getidsbot to your group\n"
                 "2. Send any message\n"
-                "3. Bot will show group ID",
-                parse_mode='Markdown'
+                "3. Bot will show group ID"
             )
             return
         
@@ -45,8 +44,7 @@ class SuperAdminHandlers:
                 await context.bot.send_message(
                     group_id,
                     "✅ **This group has been activated for ToonPay Support!**\n\n"
-                    "Users can now use /support command here.",
-                    parse_mode='Markdown'
+                    "Users can now use /support command here."
                 )
                 
                 # Save to database
@@ -54,15 +52,13 @@ class SuperAdminHandlers:
                 
                 await update.message.reply_text(
                     f"✅ Group `{group_id}` activated successfully!\n\n"
-                    f"Users can now use /support in that group.",
-                    parse_mode='Markdown'
+                    f"Users can now use /support in that group."
                 )
             except Exception as e:
                 await update.message.reply_text(
                     f"❌ **Failed to activate group**\n\n"
                     f"Make sure I'm an admin in that group!\n"
-                    f"Error: {str(e)}",
-                    parse_mode='Markdown'
+                    f"Error: {str(e)}"
                 )
                 
         except ValueError:
@@ -75,15 +71,14 @@ class SuperAdminHandlers:
             return
         
         if not context.args:
-            await update.message.reply_text("📝 **Usage:** `/deactivate <group_id>`", parse_mode='Markdown')
+            await update.message.reply_text("📝 **Usage:** `/deactivate <group_id>`")
             return
         
         try:
             group_id = int(context.args[0])
             self.db.deactivate_group(group_id)
             await update.message.reply_text(
-                f"✅ Group `{group_id}` deactivated successfully.",
-                parse_mode='Markdown'
+                f"✅ Group `{group_id}` deactivated successfully."
             )
         except ValueError:
             await update.message.reply_text("❌ Invalid group ID. Must be a number.")
@@ -96,14 +91,14 @@ class SuperAdminHandlers:
         
         groups = self.db.get_activated_groups()
         if groups:
-            message = "📋 **Activated Groups:**\n\n"
+            message = "📋 Activated Groups:\n\n"
             for group_id in groups:
-                message += f"• `{group_id}`\n"
+                message += f"• {group_id}\n"
             message += f"\nTotal: {len(groups)} groups"
         else:
-            message = "📭 No activated groups.\n\nUse `/activate <group_id>` to add one."
+            message = "📭 No activated groups.\n\nUse /activate <group_id> to add one."
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message)
     
     # ==================== DATA MANAGEMENT ====================
     
@@ -120,8 +115,7 @@ class SuperAdminHandlers:
                 "• `/deletedata 30d` - deletes tickets older than 30 days\n"
                 "• `/deletedata 12h` - deletes tickets older than 12 hours\n"
                 "• `/deletedata 45m` - deletes tickets older than 45 minutes\n"
-                "• `/deletedata 7 days` - also works with full words",
-                parse_mode='Markdown'
+                "• `/deletedata 7 days` - also works with full words"
             )
             return
         
@@ -143,8 +137,7 @@ class SuperAdminHandlers:
                 time_str = f"{delta.seconds // 60} minutes"
             
             await update.message.reply_text(
-                f"✅ Deleted `{deleted}` tickets older than {time_str}.",
-                parse_mode='Markdown'
+                f"✅ Deleted `{deleted}` tickets older than {time_str}."
             )
         except Exception as e:
             logger.error(f"Error deleting data: {e}")
@@ -164,8 +157,7 @@ class SuperAdminHandlers:
                 "Examples:\n"
                 "• `/addfilter presale https://t.me/presale_link`\n"
                 "• `/addfilter rules Please read our rules...`\n"
-                "• `/addfilter website https://toonpay.com`",
-                parse_mode='Markdown'
+                "• `/addfilter website https://toonpay.com`"
             )
             return
         
@@ -178,8 +170,7 @@ class SuperAdminHandlers:
         await update.message.reply_text(
             f"✅ **Custom command added!**\n\n"
             f"Command: `/{command}`\n"
-            f"Content: {content[:100]}{'...' if len(content) > 100 else ''}",
-            parse_mode='Markdown'
+            f"Content: {content[:100]}{'...' if len(content) > 100 else ''}"
         )
     
     async def remove_filter(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,8 +182,7 @@ class SuperAdminHandlers:
         if not context.args:
             await update.message.reply_text(
                 "📝 **Usage:** `/removefilter <command>`\n\n"
-                "Example: `/removefilter presale`",
-                parse_mode='Markdown'
+                "Example: `/removefilter presale`"
             )
             return
         
@@ -200,13 +190,11 @@ class SuperAdminHandlers:
         
         if self.db.remove_custom_command(command):
             await update.message.reply_text(
-                f"✅ Command `/{command}` removed successfully.",
-                parse_mode='Markdown'
+                f"✅ Command `/{command}` removed successfully."
             )
         else:
             await update.message.reply_text(
-                f"❌ Command `/{command}` not found.",
-                parse_mode='Markdown'
+                f"❌ Command `/{command}` not found."
             )
     
     async def list_filters(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -221,11 +209,13 @@ class SuperAdminHandlers:
             await update.message.reply_text("📭 No custom commands added yet.")
             return
         
-        message = "📋 **Custom Commands:**\n\n"
+        message = "📋 Custom Commands:\n\n"
         for cmd in commands:
-            message += f"• `/{cmd['command']}` - {cmd['content'][:50]}...\n"
+            # Truncate content if too long
+            content = cmd['content'][:50] + "..." if len(cmd['content']) > 50 else cmd['content']
+            message += f"• /{cmd['command']} - {content}\n"
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message)
     
     # ==================== USER BROADCAST ====================
     
@@ -244,8 +234,7 @@ class SuperAdminHandlers:
                 "• Images with captions\n"
                 "• Videos with captions\n"
                 "• GIFs\n"
-                "• Any media type",
-                parse_mode='Markdown'
+                "• Any media type"
             )
             return
         
@@ -257,8 +246,7 @@ class SuperAdminHandlers:
         
         status_msg = await update.message.reply_text(
             f"📤 **Broadcasting to {len(users)} users...**\n"
-            f"⏳ Please wait...",
-            parse_mode='Markdown'
+            f"⏳ Please wait..."
         )
         
         success_count = 0
@@ -307,11 +295,10 @@ class SuperAdminHandlers:
             await asyncio.sleep(0.05)
         
         await status_msg.edit_text(
-            f"📊 **User Broadcast Complete**\n\n"
+            f"📊 User Broadcast Complete\n\n"
             f"✅ Success: {success_count}\n"
             f"❌ Failed: {fail_count}\n"
-            f"📈 Total: {len(users)}",
-            parse_mode='Markdown'
+            f"📈 Total: {len(users)}"
         )
     
     # ==================== GROUP BROADCAST ====================
@@ -331,8 +318,7 @@ class SuperAdminHandlers:
                 "• Images with captions\n"
                 "• Videos with captions\n"
                 "• GIFs\n"
-                "• Any media type",
-                parse_mode='Markdown'
+                "• Any media type"
             )
             return
         
@@ -349,8 +335,7 @@ class SuperAdminHandlers:
         
         status_msg = await update.message.reply_text(
             f"📤 **Broadcasting to {len(all_groups)} groups...**\n"
-            f"⏳ Please wait...",
-            parse_mode='Markdown'
+            f"⏳ Please wait..."
         )
         
         success_count = 0
@@ -401,7 +386,7 @@ class SuperAdminHandlers:
             await asyncio.sleep(0.05)
         
         # Send summary
-        summary = f"📊 **Group Broadcast Complete**\n\n"
+        summary = f"📊 Group Broadcast Complete\n\n"
         summary += f"✅ Success: {success_count}\n"
         summary += f"❌ Failed: {fail_count}\n"
         summary += f"📈 Total: {len(all_groups)}\n\n"
@@ -409,11 +394,11 @@ class SuperAdminHandlers:
         if failed_groups:
             summary += f"Failed Groups:\n"
             for g in failed_groups[:10]:  # Show first 10 failed groups
-                summary += f"• `{g}`\n"
+                summary += f"• {g}\n"
             if len(failed_groups) > 10:
                 summary += f"... and {len(failed_groups) - 10} more"
         
-        await status_msg.edit_text(summary, parse_mode='Markdown')
+        await status_msg.edit_text(summary)
     
     async def broadcast_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send broadcast message to a specific group"""
@@ -424,16 +409,14 @@ class SuperAdminHandlers:
         if len(context.args) < 1:
             await update.message.reply_text(
                 "📝 **Usage:** Reply to a message with `/broadcast_group <group_id>`\n\n"
-                "Example: `/broadcast_group -100123456789`",
-                parse_mode='Markdown'
+                "Example: `/broadcast_group -100123456789`"
             )
             return
         
         # Check if replying to a message
         if not update.message.reply_to_message:
             await update.message.reply_text(
-                "❌ Please reply to a message to broadcast.",
-                parse_mode='Markdown'
+                "❌ Please reply to a message to broadcast."
             )
             return
         
@@ -477,13 +460,11 @@ class SuperAdminHandlers:
                 )
             
             await update.message.reply_text(
-                f"✅ Message sent successfully to group `{group_id}`.",
-                parse_mode='Markdown'
+                f"✅ Message sent successfully to group `{group_id}`."
             )
         except Exception as e:
             await update.message.reply_text(
-                f"❌ Failed to send message to group `{group_id}`.\n\nError: {str(e)}",
-                parse_mode='Markdown'
+                f"❌ Failed to send message to group `{group_id}`.\n\nError: {str(e)}"
             )
     
     # ==================== CHANNEL BROADCAST ====================
@@ -503,8 +484,7 @@ class SuperAdminHandlers:
                 "• Images with captions\n"
                 "• Videos with captions\n"
                 "• GIFs\n"
-                "• Any media type",
-                parse_mode='Markdown'
+                "• Any media type"
             )
             return
         
@@ -517,8 +497,7 @@ class SuperAdminHandlers:
         
         status_msg = await update.message.reply_text(
             f"📤 **Broadcasting to {len(channels)} channels...**\n"
-            f"⏳ Please wait...",
-            parse_mode='Markdown'
+            f"⏳ Please wait..."
         )
         
         success_count = 0
@@ -570,7 +549,7 @@ class SuperAdminHandlers:
             await asyncio.sleep(0.05)
         
         # Send summary
-        summary = f"📊 **Channel Broadcast Complete**\n\n"
+        summary = f"📊 Channel Broadcast Complete\n\n"
         summary += f"✅ Success: {success_count}\n"
         summary += f"❌ Failed: {fail_count}\n"
         summary += f"📈 Total: {len(channels)}\n\n"
@@ -578,11 +557,11 @@ class SuperAdminHandlers:
         if failed_channels:
             summary += f"Failed Channels:\n"
             for c in failed_channels[:10]:  # Show first 10 failed channels
-                summary += f"• `{c}`\n"
+                summary += f"• {c}\n"
             if len(failed_channels) > 10:
                 summary += f"... and {len(failed_channels) - 10} more"
         
-        await status_msg.edit_text(summary, parse_mode='Markdown')
+        await status_msg.edit_text(summary)
     
     async def broadcast_channel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send broadcast message to a specific channel"""
@@ -593,16 +572,14 @@ class SuperAdminHandlers:
         if len(context.args) < 1:
             await update.message.reply_text(
                 "📝 **Usage:** Reply to a message with `/broadcast_channel <channel_id>`\n\n"
-                "Example: `/broadcast_channel -100123456789`",
-                parse_mode='Markdown'
+                "Example: `/broadcast_channel -100123456789`"
             )
             return
         
         # Check if replying to a message
         if not update.message.reply_to_message:
             await update.message.reply_text(
-                "❌ Please reply to a message to broadcast.",
-                parse_mode='Markdown'
+                "❌ Please reply to a message to broadcast."
             )
             return
         
@@ -646,13 +623,11 @@ class SuperAdminHandlers:
                 )
             
             await update.message.reply_text(
-                f"✅ Message sent successfully to channel `{channel_id}`.",
-                parse_mode='Markdown'
+                f"✅ Message sent successfully to channel `{channel_id}`."
             )
         except Exception as e:
             await update.message.reply_text(
-                f"❌ Failed to send message to channel `{channel_id}`.\n\nError: {str(e)}",
-                parse_mode='Markdown'
+                f"❌ Failed to send message to channel `{channel_id}`.\n\nError: {str(e)}"
             )
     
     # ==================== CHANNEL MANAGEMENT ====================
@@ -666,8 +641,7 @@ class SuperAdminHandlers:
         if len(context.args) < 1:
             await update.message.reply_text(
                 "📝 **Usage:** `/addchannel <channel_id>`\n\n"
-                "Example: `/addchannel -100123456789`",
-                parse_mode='Markdown'
+                "Example: `/addchannel -100123456789`"
             )
             return
         
@@ -678,23 +652,20 @@ class SuperAdminHandlers:
             try:
                 await context.bot.send_message(
                     channel_id,
-                    "✅ **This channel has been added to ToonPay broadcast list!**",
-                    parse_mode='Markdown'
+                    "✅ **This channel has been added to ToonPay broadcast list!**"
                 )
                 
                 # Save to database
                 self.db.add_channel(channel_id, update.effective_user.id)
                 
                 await update.message.reply_text(
-                    f"✅ Channel `{channel_id}` added successfully!",
-                    parse_mode='Markdown'
+                    f"✅ Channel `{channel_id}` added successfully!"
                 )
             except Exception as e:
                 await update.message.reply_text(
                     f"❌ **Failed to add channel**\n\n"
                     f"Make sure I'm an admin in that channel!\n"
-                    f"Error: {str(e)}",
-                    parse_mode='Markdown'
+                    f"Error: {str(e)}"
                 )
                 
         except ValueError:
@@ -708,8 +679,7 @@ class SuperAdminHandlers:
         
         if len(context.args) < 1:
             await update.message.reply_text(
-                "📝 **Usage:** `/removechannel <channel_id>`",
-                parse_mode='Markdown'
+                "📝 **Usage:** `/removechannel <channel_id>`"
             )
             return
         
@@ -717,8 +687,7 @@ class SuperAdminHandlers:
             channel_id = int(context.args[0])
             self.db.remove_channel(channel_id)
             await update.message.reply_text(
-                f"✅ Channel `{channel_id}` removed successfully.",
-                parse_mode='Markdown'
+                f"✅ Channel `{channel_id}` removed successfully."
             )
         except ValueError:
             await update.message.reply_text("❌ Invalid channel ID. Must be a number.")
@@ -731,19 +700,19 @@ class SuperAdminHandlers:
         
         channels = self.db.get_all_channels()
         if channels:
-            message = "📋 **Broadcast Channels:**\n\n"
+            message = "📋 Broadcast Channels:\n\n"
             for channel in channels:
                 added_date = channel['added_at']
                 if added_date:
                     date_str = added_date.strftime('%Y-%m-%d')
                 else:
                     date_str = "Unknown"
-                message += f"• `{channel['channel_id']}` (Added: {date_str})\n"
+                message += f"• {channel['channel_id']} (Added: {date_str})\n"
             message += f"\nTotal: {len(channels)} channels"
         else:
-            message = "📭 No channels added.\n\nUse `/addchannel <channel_id>` to add one."
+            message = "📭 No channels added.\n\nUse /addchannel <channel_id> to add one."
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message)
     
     # ==================== COMPLETE STATISTICS (FIXED) ====================
     
@@ -766,56 +735,64 @@ class SuperAdminHandlers:
         # Users who only started bot but never created ticket
         inactive_users = [u for u in users_stats if u['total_tickets'] == 0]
         
-        # Overall stats message
-        overall = f"""📊 **Complete Bot Statistics**
+        # Overall stats message (without Markdown)
+        overall = f"""📊 Complete Bot Statistics
 
-**Overview:**
-👥 **Total Users:** {total_users}
-🎫 **Total Tickets:** {total_tickets}
-✅ **Solved Tickets:** {total_solved}
-🔄 **In Progress:** {total_in_progress}
-🚫 **Spam Tickets:** {total_spam}
-📭 **Inactive Users:** {len(inactive_users)} (started bot but no tickets)
+Overview:
+👥 Total Users: {total_users}
+🎫 Total Tickets: {total_tickets}
+✅ Solved Tickets: {total_solved}
+🔄 In Progress: {total_in_progress}
+🚫 Spam Tickets: {total_spam}
+📭 Inactive Users: {len(inactive_users)} (started bot but no tickets)
 
 """
         
-        await update.message.reply_text(overall, parse_mode='Markdown')
+        await update.message.reply_text(overall)
         
         # Individual user stats
         if users_stats:
             await update.message.reply_text(
-                "📋 **User Details:**\n\n"
-                "_(Sending detailed list...)_",
-                parse_mode='Markdown'
+                "📋 User Details:\n\n"
+                "(Sending detailed list...)"
             )
             
             # Send users in batches to avoid message too long error
             batch = ""
             for user in users_stats:
-                # Handle None created_at - FIXED HERE
+                # Handle None created_at
                 created_date = user['created_at']
                 if created_date:
                     date_str = created_date.strftime('%Y-%m-%d %H:%M')
                 else:
                     date_str = "Unknown"
                 
-                user_info = f"""**Name:** {user['name']}
-**Username:** @{user['username'] or 'N/A'}
-**User ID:** `{user['user_id']}`
-**Language:** {user.get('language', 'en')}
-**Registered:** {date_str}
-**Status:** {'✅ Active' if user['total_tickets'] > 0 else '📭 Inactive'}
-**Tickets:** Total: {user['total_tickets']} | ✅ Solved: {user['solved_tickets']} | 🔄 In Progress: {user['in_progress_tickets']} | 🚫 Spam: {user['spam_tickets']}
+                # Handle username
+                username = user['username'] or 'N/A'
+                if username != 'N/A' and not username.startswith('@'):
+                    username = f"@{username}"
+                
+                # Handle name
+                name = user['name'] or 'Unknown'
+                
+                user_info = f"""Name: {name}
+Username: {username}
+User ID: {user['user_id']}
+Language: {user.get('language', 'en')}
+Registered: {date_str}
+Status: {'✅ Active' if user['total_tickets'] > 0 else '📭 Inactive'}
+Tickets: Total: {user['total_tickets']} | ✅ Solved: {user['solved_tickets']} | 🔄 In Progress: {user['in_progress_tickets']} | 🚫 Spam: {user['spam_tickets']}
 ─────────────────────
+
 """
                 
                 if len(batch) + len(user_info) > 4000:
-                    await update.message.reply_text(batch, parse_mode='Markdown')
+                    await update.message.reply_text(batch)
                     batch = user_info
                 else:
                     batch += user_info
             
             if batch:
-                await update.message.reply_text(batch, parse_mode='Markdown')
+                await update.message.reply_text(batch)
         else:
             await update.message.reply_text("📭 No users found.")
