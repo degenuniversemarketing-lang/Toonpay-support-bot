@@ -35,8 +35,7 @@ class AdminHandlers:
             context.user_data['replying_to'] = ticket_id
             await query.edit_message_text(
                 f"✏️ **Replying to Ticket #{ticket_id}**\n\n"
-                f"Please type your reply below:",
-                parse_mode='Markdown'
+                f"Please type your reply below:"
             )
         
         elif data.startswith('progress_'):
@@ -48,14 +47,12 @@ class AdminHandlers:
                     f"✅ **Ticket #{ticket_id}**\n\n"
                     f"Status: 🔄 In Progress\n"
                     f"Admin: @{admin.username}\n\n"
-                    f"The ticket has been marked as in progress.",
-                    parse_mode='Markdown'
+                    f"The ticket has been marked as in progress."
                 )
             else:
                 await query.edit_message_text(
                     f"❌ **Failed to update Ticket #{ticket_id}**\n\n"
-                    f"Please try again or check if ticket exists.",
-                    parse_mode='Markdown'
+                    f"Please try again or check if ticket exists."
                 )
         
         elif data.startswith('spam_'):
@@ -67,14 +64,12 @@ class AdminHandlers:
                     f"🚫 **Ticket #{ticket_id}**\n\n"
                     f"Status: ❌ Closed as Spam\n"
                     f"Admin: @{admin.username}\n\n"
-                    f"This ticket has been marked as spam and closed.",
-                    parse_mode='Markdown'
+                    f"This ticket has been marked as spam and closed."
                 )
             else:
                 await query.edit_message_text(
                     f"❌ **Failed to mark Ticket #{ticket_id} as spam**\n\n"
-                    f"Please try again or check if ticket exists.",
-                    parse_mode='Markdown'
+                    f"Please try again or check if ticket exists."
                 )
     
     async def handle_admin_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,8 +101,7 @@ class AdminHandlers:
                         f"**Your question:**\n{question[:200]}{'...' if len(question) > 200 else ''}\n\n"
                         f"**Answer:**\n{reply_text}\n\n"
                         f"Thank you for contacting ToonPay Support!\n"
-                        f"Need more help? Create a new ticket with /start",
-                        parse_mode='Markdown'
+                        f"Need more help? Create a new ticket with /start"
                     )
                     logger.info(f"User {user_id} notified about ticket #{ticket_id}")
                 except Exception as e:
@@ -116,8 +110,7 @@ class AdminHandlers:
             await update.message.reply_text(
                 f"✅ **Reply sent for Ticket #{ticket_id}**\n\n"
                 f"Admin: @{admin.username}\n"
-                f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}",
-                parse_mode='Markdown'
+                f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}"
             )
             
             # Update the original admin group message if possible
@@ -127,16 +120,14 @@ class AdminHandlers:
                         f"✅ **Ticket #{ticket_id}**\n\n"
                         f"Status: ✅ Closed\n"
                         f"Replied by: @{admin.username}\n"
-                        f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}",
-                        parse_mode='Markdown'
+                        f"Reply: {reply_text[:100]}{'...' if len(reply_text) > 100 else ''}"
                     )
                 except Exception as e:
                     logger.error(f"Failed to update original message: {e}")
         else:
             await update.message.reply_text(
                 f"❌ **Failed to reply to Ticket #{ticket_id}**\n\n"
-                f"Ticket may be already closed or doesn't exist.",
-                parse_mode='Markdown'
+                f"Ticket may be already closed or doesn't exist."
             )
         
         del context.user_data['replying_to']
@@ -182,8 +173,7 @@ class AdminHandlers:
                 
                 await update.message.reply_text(
                     message,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 message = ""  # Reset for next ticket
             
@@ -199,7 +189,7 @@ class AdminHandlers:
         
         stats = self.db.get_stats()
         
-        message = "📊 **Support Bot Statistics**\n\n"
+        message = f"📊 **Support Bot Statistics**\n\n"
         message += f"📈 **Total Tickets:** {stats['total']}\n"
         message += f"✅ **Closed:** {stats['closed']}\n"
         message += f"🔄 **In Progress:** {stats['in_progress']}\n"
@@ -208,12 +198,15 @@ class AdminHandlers:
         message += "👨‍💼 **Admin Performance:**\n"
         
         if stats['admin_stats']:
-            for admin, solved, closed in stats['admin_stats']:
-                message += f"• @{admin}: {solved} tickets solved ({closed} closed)\n"
+            for admin in stats['admin_stats']:
+                admin_name = admin[0] if isinstance(admin, tuple) else admin.get('admin', 'Unknown')
+                solved = admin[1] if isinstance(admin, tuple) else admin.get('solved', 0)
+                closed = admin[2] if isinstance(admin, tuple) else admin.get('closed_count', 0)
+                message += f"• @{admin_name}: {solved} tickets solved ({closed} closed)\n"
         else:
             message += "• No tickets solved yet\n"
         
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message)
     
     async def search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Search users"""
@@ -222,13 +215,12 @@ class AdminHandlers:
         
         if not context.args:
             await update.message.reply_text(
-                "🔍 **Usage:** `/search <name/username/user_id/email>`\n\n"
-                "Examples:\n"
-                "• `/search john`\n"
-                "• `/search @username`\n"
-                "• `/search 123456789`\n"
-                "• `/search user@example.com`",
-                parse_mode='Markdown'
+                f"🔍 **Usage:** `/search <name/username/user_id/email>`\n\n"
+                f"Examples:\n"
+                f"• `/search john`\n"
+                f"• `/search @username`\n"
+                f"• `/search 123456789`\n"
+                f"• `/search user@example.com`"
             )
             return
         
@@ -236,17 +228,25 @@ class AdminHandlers:
         results = self.db.search_user(query)
         
         if not results:
-            await update.message.reply_text(f"❌ No users found matching: `{query}`", parse_mode='Markdown')
+            await update.message.reply_text(f"❌ No users found matching: `{query}`")
             return
         
         for user in results:
+            # Handle None created_at - FIXED HERE
+            created_date = user['created_at']
+            if created_date:
+                date_str = created_date.strftime('%Y-%m-%d %H:%M')
+            else:
+                date_str = "Unknown"
+            
             message = f"👤 **User Information**\n\n"
             message += f"**Name:** {user['first_name']} {user.get('last_name', '')}\n"
             message += f"**Username:** @{user['username'] or 'N/A'}\n"
             message += f"**User ID:** `{user['user_id']}`\n"
             message += f"**Email:** {user.get('email', 'N/A')}\n"
             message += f"**Phone:** {user.get('phone', 'N/A')}\n"
-            message += f"**Registered:** {user['created_at'].strftime('%Y-%m-%d %H:%M')}\n\n"
+            message += f"**Language:** {user.get('language', 'en').upper()}\n"
+            message += f"**Registered:** {date_str}\n\n"
             
             if user.get('tickets'):
                 message += f"**Tickets ({len(user['tickets'])}):**\n"
@@ -258,7 +258,13 @@ class AdminHandlers:
                         'spam': '🚫'
                     }.get(ticket['status'], '❓')
                     
-                    message += f"{status_emoji} #{ticket['ticket_id']} - {ticket['created_at'].strftime('%Y-%m-%d')}\n"
+                    created_date = ticket['created_at']
+                    if created_date:
+                        ticket_date = created_date.strftime('%Y-%m-%d')
+                    else:
+                        ticket_date = "Unknown"
+                    
+                    message += f"{status_emoji} #{ticket['ticket_id']} - {ticket_date}\n"
                 
                 if len(user['tickets']) > 3:
                     message += f"... and {len(user['tickets']) - 3} more\n"
@@ -268,9 +274,9 @@ class AdminHandlers:
             # Split long messages
             if len(message) > 4000:
                 for i in range(0, len(message), 3500):
-                    await update.message.reply_text(message[i:i+3500], parse_mode='Markdown')
+                    await update.message.reply_text(message[i:i+3500])
             else:
-                await update.message.reply_text(message, parse_mode='Markdown')
+                await update.message.reply_text(message)
     
     async def download(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Download tickets as CSV"""
