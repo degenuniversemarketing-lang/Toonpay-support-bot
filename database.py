@@ -15,7 +15,7 @@ class Database:
         if self.conn:
             self.fix_schema()
             self.create_tables()
-            self.fix_null_created_at()  # Fix any NULL created_at values
+            self.fix_null_created_at()
     
     def connect(self):
         """Establish database connection"""
@@ -63,13 +63,9 @@ class Database:
                 
                 if not has_ticket_id:
                     logger.warning("ticket_id column missing! Recreating tickets table...")
-                    
-                    # Drop and recreate tickets table
                     cursor.execute("DROP TABLE IF EXISTS ticket_logs CASCADE")
                     cursor.execute("DROP TABLE IF EXISTS tickets CASCADE")
                     logger.info("Dropped old tickets table")
-                    
-                # Check if ticket_id is SERIAL
                 else:
                     cursor.execute("""
                         SELECT data_type 
@@ -115,7 +111,7 @@ class Database:
             ''')
             logger.info("Users table created/verified")
             
-            # Check if language column exists (for existing tables)
+            # Check if language column exists
             try:
                 cursor.execute("""
                     SELECT column_name 
@@ -138,7 +134,7 @@ class Database:
             ''')
             logger.info("Admin groups table created/verified")
             
-            # Activated groups table (for /support command)
+            # Activated groups table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS activated_groups (
                     group_id BIGINT PRIMARY KEY,
@@ -148,7 +144,7 @@ class Database:
             ''')
             logger.info("Activated groups table created/verified")
             
-            # Channels table (for broadcast to channels)
+            # Channels table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS channels (
                     channel_id BIGINT PRIMARY KEY,
@@ -295,7 +291,6 @@ class Database:
             cursor = self.conn.cursor()
             
             if name:
-                # Split name into first and last name
                 name_parts = name.split(' ', 1)
                 first_name = name_parts[0]
                 last_name = name_parts[1] if len(name_parts) > 1 else ''
@@ -397,6 +392,71 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting user {user_id}: {e}")
             return None
+        finally:
+            if cursor:
+                cursor.close()
+    
+    # ==================== LANGUAGE STATISTICS METHODS (NEW) ====================
+    
+    def get_language_statistics(self):
+        """Get count of users by language"""
+        if not self.conn:
+            logger.error("No database connection for get_language_statistics")
+            return {}
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT language, COUNT(*) as count 
+                FROM users 
+                GROUP BY language
+                ORDER BY count DESC
+            ''')
+            results = cursor.fetchall()
+            return {row[0]: row[1] for row in results}
+        except Exception as e:
+            logger.error(f"Error getting language statistics: {e}")
+            return {}
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_users_by_language(self, language):
+        """Get all users with a specific language"""
+        if not self.conn:
+            logger.error("No database connection for get_users_by_language")
+            return []
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT user_id FROM users WHERE language = %s', (language,))
+            users = cursor.fetchall()
+            logger.info(f"Found {len(users)} users with language {language}")
+            return users
+        except Exception as e:
+            logger.error(f"Error getting users by language {language}: {e}")
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+
+    def get_user_count_by_language(self, language):
+        """Get count of users with a specific language"""
+        if not self.conn:
+            logger.error("No database connection for get_user_count_by_language")
+            return 0
+        
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM users WHERE language = %s', (language,))
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Error getting user count by language {language}: {e}")
+            return 0
         finally:
             if cursor:
                 cursor.close()
@@ -769,7 +829,6 @@ class Database:
             ''')
             users = cursor.fetchall()
             
-            # Format name
             for user in users:
                 user['name'] = f"{user['first_name']} {user.get('last_name', '')}".strip()
             
@@ -792,7 +851,6 @@ class Database:
         cursor = None
         try:
             cursor = self.conn.cursor()
-            
             cursor.execute('''
                 INSERT INTO tickets (user_id, question, status)
                 VALUES (%s, %s, 'pending')
@@ -809,12 +867,9 @@ class Database:
                 logger.error(f"No ticket_id returned from INSERT for user {user_id}")
                 self.conn.rollback()
                 return None
-                
         except Exception as e:
             logger.error(f"Error creating ticket for user {user_id}: {e}")
-            logger.error(traceback.format_exc())
-            if self.conn:
-                self.conn.rollback()
+            self.conn.rollback()
             return None
         finally:
             if cursor:
@@ -837,7 +892,6 @@ class Database:
                 ORDER BY t.created_at DESC
             ''')
             tickets = cursor.fetchall()
-            logger.info(f"Found {len(tickets)} pending tickets")
             return tickets
         except Exception as e:
             logger.error(f"Error getting pending tickets: {e}")
@@ -861,7 +915,6 @@ class Database:
                 ORDER BY created_at DESC
             ''', (user_id,))
             tickets = cursor.fetchall()
-            logger.info(f"Found {len(tickets)} tickets for user {user_id}")
             return tickets
         except Exception as e:
             logger.error(f"Error getting user tickets for {user_id}: {e}")
@@ -903,8 +956,6 @@ class Database:
         cursor = None
         try:
             cursor = self.conn.cursor()
-            
-            # First check if ticket exists and is not closed
             cursor.execute('SELECT status FROM tickets WHERE ticket_id = %s', (ticket_id,))
             result = cursor.fetchone()
             
@@ -916,7 +967,6 @@ class Database:
                 logger.warning(f"Ticket {ticket_id} is already closed")
                 return False
             
-            # Update ticket
             cursor.execute('''
                 UPDATE tickets 
                 SET admin_answer = %s, 
@@ -932,7 +982,6 @@ class Database:
             result = cursor.fetchone()
             
             if result:
-                # Log the action
                 cursor.execute('''
                     INSERT INTO ticket_logs (ticket_id, action, admin_id, admin_username)
                     VALUES (%s, 'replied', %s, %s)
@@ -944,12 +993,9 @@ class Database:
                 logger.warning(f"Ticket {ticket_id} update returned no rows")
                 self.conn.rollback()
                 return False
-            
         except Exception as e:
             logger.error(f"Error replying to ticket {ticket_id}: {e}")
-            logger.error(traceback.format_exc())
-            if self.conn:
-                self.conn.rollback()
+            self.conn.rollback()
             return False
         finally:
             if cursor:
@@ -977,24 +1023,19 @@ class Database:
             result = cursor.fetchone()
             
             if result:
-                # Log the action
                 cursor.execute('''
                     INSERT INTO ticket_logs (ticket_id, action, admin_id, admin_username)
                     VALUES (%s, %s, %s, %s)
                 ''', (ticket_id, status, admin_id, admin_username))
                 self.conn.commit()
-                logger.info(f"Ticket {ticket_id} status updated to {status} by {admin_username}")
+                logger.info(f"Ticket {ticket_id} status updated to {status}")
                 return True
             else:
-                logger.warning(f"Ticket {ticket_id} status update returned no rows")
                 self.conn.rollback()
                 return False
-                
         except Exception as e:
-            logger.error(f"Error updating ticket status for {ticket_id}: {e}")
-            logger.error(traceback.format_exc())
-            if self.conn:
-                self.conn.rollback()
+            logger.error(f"Error updating ticket status: {e}")
+            self.conn.rollback()
             return False
         finally:
             if cursor:
@@ -1005,70 +1046,30 @@ class Database:
     def get_stats(self):
         """Get bot statistics"""
         if not self.conn:
-            logger.error("No database connection for get_stats")
-            return {
-                'total': 0,
-                'closed': 0,
-                'in_progress': 0,
-                'pending': 0,
-                'spam': 0,
-                'admin_stats': []
-            }
+            return {'total': 0, 'closed': 0, 'in_progress': 0, 'pending': 0, 'spam': 0, 'admin_stats': []}
         
         cursor = None
         try:
             cursor = self.conn.cursor()
-            
-            # Total tickets
             cursor.execute('SELECT COUNT(*) FROM tickets')
             total = cursor.fetchone()[0]
-            
-            # Closed tickets
             cursor.execute('SELECT COUNT(*) FROM tickets WHERE status = %s', ('closed',))
             closed = cursor.fetchone()[0]
-            
-            # In progress
             cursor.execute('SELECT COUNT(*) FROM tickets WHERE status = %s', ('in_progress',))
             in_progress = cursor.fetchone()[0]
-            
-            # Pending
             cursor.execute('SELECT COUNT(*) FROM tickets WHERE status = %s', ('pending',))
             pending = cursor.fetchone()[0]
-            
-            # Spam
             cursor.execute('SELECT COUNT(*) FROM tickets WHERE status = %s', ('spam',))
             spam = cursor.fetchone()[0]
-            
-            # Admin stats
             cursor.execute('''
-                SELECT 
-                    COALESCE(replied_by_username, 'Unknown') as admin,
-                    COUNT(*) as solved,
-                    SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_count
-                FROM tickets 
-                WHERE replied_by_username IS NOT NULL
-                GROUP BY replied_by_username
+                SELECT COALESCE(replied_by_username, 'Unknown') as admin, COUNT(*) as solved
+                FROM tickets WHERE replied_by_username IS NOT NULL GROUP BY replied_by_username
             ''')
             admin_stats = cursor.fetchall()
-            
-            return {
-                'total': total,
-                'closed': closed,
-                'in_progress': in_progress,
-                'pending': pending,
-                'spam': spam,
-                'admin_stats': admin_stats
-            }
+            return {'total': total, 'closed': closed, 'in_progress': in_progress, 'pending': pending, 'spam': spam, 'admin_stats': admin_stats}
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
-            return {
-                'total': 0,
-                'closed': 0,
-                'in_progress': 0,
-                'pending': 0,
-                'spam': 0,
-                'admin_stats': []
-            }
+            return {'total': 0, 'closed': 0, 'in_progress': 0, 'pending': 0, 'spam': 0, 'admin_stats': []}
         finally:
             if cursor:
                 cursor.close()
@@ -1078,7 +1079,6 @@ class Database:
     def search_user(self, query):
         """Search users by various fields"""
         if not self.conn:
-            logger.error("No database connection for search_user")
             return []
         
         cursor = None
@@ -1087,25 +1087,15 @@ class Database:
             cursor.execute('''
                 SELECT DISTINCT u.*
                 FROM users u
-                WHERE u.user_id::text LIKE %s 
-                   OR u.username ILIKE %s 
-                   OR u.email ILIKE %s 
-                   OR u.phone LIKE %s
+                WHERE u.user_id::text LIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR u.phone LIKE %s
             ''', (f'%{query}%', f'%{query}%', f'%{query}%', f'%{query}%'))
             users = cursor.fetchall()
-            
-            # Get tickets for each user
             for user in users:
-                cursor.execute('''
-                    SELECT * FROM tickets 
-                    WHERE user_id = %s 
-                    ORDER BY created_at DESC
-                ''', (user['user_id'],))
+                cursor.execute('SELECT * FROM tickets WHERE user_id = %s ORDER BY created_at DESC', (user['user_id'],))
                 user['tickets'] = cursor.fetchall()
-            
             return users
         except Exception as e:
-            logger.error(f"Error searching user with query '{query}': {e}")
+            logger.error(f"Error searching user: {e}")
             return []
         finally:
             if cursor:
@@ -1114,96 +1104,23 @@ class Database:
     # ==================== EXPORT METHODS ====================
     
     def export_all_tickets(self):
-        """Export all tickets for Excel download"""
+        """Export all tickets for download"""
         if not self.conn:
-            logger.error("No database connection for export_all_tickets")
             return []
         
         cursor = None
         try:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute('''
-                SELECT 
-                    COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') as name,
-                    u.username,
-                    u.user_id,
-                    t.ticket_id,
-                    COALESCE(u.email, 'N/A') as email,
-                    COALESCE(u.phone, 'N/A') as phone,
-                    t.question as user_question,
-                    COALESCE(t.admin_answer, 'No reply yet') as admin_answer,
-                    t.status as ticket_status,
-                    t.created_at as date_time,
-                    COALESCE(t.replied_by_username, 'N/A') as replied_by_admin
-                FROM tickets t
-                LEFT JOIN users u ON t.user_id = u.user_id
-                ORDER BY u.user_id, t.created_at
+                SELECT COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') as name, u.username, u.user_id, t.ticket_id,
+                       COALESCE(u.email, 'N/A') as email, COALESCE(u.phone, 'N/A') as phone, t.question as user_question,
+                       COALESCE(t.admin_answer, 'No reply yet') as admin_answer, t.status as ticket_status,
+                       t.created_at as date_time, COALESCE(t.replied_by_username, 'N/A') as replied_by_admin
+                FROM tickets t LEFT JOIN users u ON t.user_id = u.user_id ORDER BY u.user_id, t.created_at
             ''')
-            tickets = cursor.fetchall()
-            return tickets
+            return cursor.fetchall()
         except Exception as e:
             logger.error(f"Error exporting tickets: {e}")
-            return []
-        finally:
-            if cursor:
-                cursor.close()
-    
-    def export_by_status(self, status):
-        """Export tickets by status"""
-        if not self.conn:
-            logger.error("No database connection for export_by_status")
-            return []
-        
-        cursor = None
-        try:
-            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute('''
-                SELECT 
-                    COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') as name,
-                    u.username,
-                    u.user_id,
-                    t.ticket_id,
-                    COALESCE(u.email, 'N/A') as email,
-                    COALESCE(u.phone, 'N/A') as phone,
-                    t.question as user_question,
-                    COALESCE(t.admin_answer, 'No reply yet') as admin_answer,
-                    t.status as ticket_status,
-                    t.created_at as date_time,
-                    COALESCE(t.replied_by_username, 'N/A') as replied_by_admin
-                FROM tickets t
-                LEFT JOIN users u ON t.user_id = u.user_id
-                WHERE t.status = %s OR %s = 'all'
-                ORDER BY u.user_id, t.created_at
-            ''', (status, status))
-            tickets = cursor.fetchall()
-            return tickets
-        except Exception as e:
-            logger.error(f"Error exporting by status {status}: {e}")
-            return []
-        finally:
-            if cursor:
-                cursor.close()
-    
-    # ==================== TICKET LOGS METHODS ====================
-    
-    def get_ticket_logs(self, ticket_id):
-        """Get logs for a specific ticket"""
-        if not self.conn:
-            logger.error("No database connection for get_ticket_logs")
-            return []
-        
-        cursor = None
-        try:
-            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute('''
-                SELECT * FROM ticket_logs 
-                WHERE ticket_id = %s 
-                ORDER BY timestamp DESC
-            ''', (ticket_id,))
-            logs = cursor.fetchall()
-            return logs
-        except Exception as e:
-            logger.error(f"Error getting ticket logs for {ticket_id}: {e}")
             return []
         finally:
             if cursor:
@@ -1214,107 +1131,19 @@ class Database:
     def delete_old_data(self, days):
         """Delete tickets older than specified days"""
         if not self.conn:
-            logger.error("No database connection for delete_old_data")
             return 0
         
         cursor = None
         try:
             cursor = self.conn.cursor()
-            cursor.execute('''
-                DELETE FROM tickets 
-                WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '%s seconds'
-                RETURNING ticket_id
-            ''', (days * 86400,))
+            cursor.execute('DELETE FROM tickets WHERE created_at < CURRENT_TIMESTAMP - INTERVAL %s SECOND RETURNING ticket_id', (days * 86400,))
             deleted = cursor.rowcount
             self.conn.commit()
-            logger.info(f"Deleted {deleted} tickets older than {days} days")
             return deleted
         except Exception as e:
             logger.error(f"Error deleting old data: {e}")
-            if self.conn:
-                self.conn.rollback()
+            self.conn.rollback()
             return 0
         finally:
             if cursor:
                 cursor.close()
-    
-    # ==================== HEALTH CHECK ====================
-    
-    def check_connection(self):
-        """Check if database connection is alive"""
-        if not self.conn:
-            return False
-        
-        cursor = None
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT 1')
-            cursor.fetchone()
-            return True
-        except Exception as e:
-            logger.error(f"Database connection check failed: {e}")
-            return False
-        finally:
-            if cursor:
-                cursor.close()
-
-def get_language_statistics(self):
-    """Get count of users by language"""
-    if not self.conn:
-        logger.error("No database connection for get_language_statistics")
-        return {}
-    
-    cursor = None
-    try:
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT language, COUNT(*) as count 
-            FROM users 
-            GROUP BY language
-        ''')
-        results = cursor.fetchall()
-        return {row[0]: row[1] for row in results}
-    except Exception as e:
-        logger.error(f"Error getting language statistics: {e}")
-        return {}
-    finally:
-        if cursor:
-            cursor.close()
-
-def get_users_by_language(self, language):
-    """Get all users with a specific language"""
-    if not self.conn:
-        logger.error("No database connection for get_users_by_language")
-        return []
-    
-    cursor = None
-    try:
-        cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute('SELECT user_id FROM users WHERE language = %s', (language,))
-        users = cursor.fetchall()
-        return users
-    except Exception as e:
-        logger.error(f"Error getting users by language {language}: {e}")
-        return []
-    finally:
-        if cursor:
-            cursor.close()
-
-def get_user_count_by_language(self, language):
-    """Get count of users with a specific language"""
-    if not self.conn:
-        logger.error("No database connection for get_user_count_by_language")
-        return 0
-    
-    cursor = None
-    try:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM users WHERE language = %s', (language,))
-        result = cursor.fetchone()
-        return result[0] if result else 0
-    except Exception as e:
-        logger.error(f"Error getting user count by language {language}: {e}")
-        return 0
-    finally:
-        if cursor:
-            cursor.close()
