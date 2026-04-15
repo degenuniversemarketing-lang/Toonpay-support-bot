@@ -3,7 +3,6 @@ import sys
 import os
 import traceback
 import asyncio
-import requests
 from pathlib import Path
 
 # Add current directory to path
@@ -41,25 +40,24 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("Exception while handling an update:", exc_info=context.error)
     
     # Prepare error message
-    error_msg = f"🚨 **Bot Error Alert** 🚨\n\n"
+    error_msg = f"🚨 Bot Error Alert 🚨\n\n"
     
     if update:
         if update.effective_user:
-            error_msg += f"**User:** @{update.effective_user.username} (ID: `{update.effective_user.id}`)\n"
+            error_msg += f"User: @{update.effective_user.username} (ID: {update.effective_user.id})\n"
         if update.effective_chat:
-            error_msg += f"**Chat:** {update.effective_chat.title or 'Private'} (ID: `{update.effective_chat.id}`)\n"
+            error_msg += f"Chat: {update.effective_chat.title or 'Private'} (ID: {update.effective_chat.id})\n"
         if update.effective_message:
-            error_msg += f"**Message:** `{update.effective_message.text}`\n"
+            error_msg += f"Message: {update.effective_message.text}\n"
     
-    error_msg += f"\n**Error:** `{str(context.error)[:200]}`\n"
-    error_msg += f"**Traceback:**\n`{traceback.format_exc()[:1000]}`"
+    error_msg += f"\nError: {str(context.error)[:200]}\n"
+    error_msg += f"Traceback:\n{traceback.format_exc()[:1000]}"
     
     # Send to super admin
     try:
         await context.bot.send_message(
             chat_id=Config.SUPER_ADMIN_ID,
-            text=error_msg,
-            parse_mode='Markdown'
+            text=error_msg
         )
     except Exception as e:
         logger.error(f"Failed to send error to super admin: {e}")
@@ -84,17 +82,27 @@ async def remove_persistent_menu(application: Application):
         logger.error(f"Failed to remove menu: {e}")
         return False
 
+async def delete_webhook(application: Application):
+    """Delete any existing webhook"""
+    try:
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook deleted successfully")
+    except Exception as e:
+        logger.error(f"Failed to delete webhook: {e}")
+
 async def post_init(application: Application) -> None:
     """Run after bot initialization"""
-    # Remove persistent menu buttons first
+    # Delete webhook first
+    await delete_webhook(application)
+    
+    # Remove persistent menu buttons
     await remove_persistent_menu(application)
     
     # Test admin group connection
     try:
         await application.bot.send_message(
             chat_id=Config.ADMIN_GROUP_ID,
-            text="✅ **Bot is online and ready to receive tickets!**",
-            parse_mode='Markdown'
+            text="✅ Bot is online and ready to receive tickets!"
         )
         logger.info(f"Successfully connected to admin group: {Config.ADMIN_GROUP_ID}")
     except Exception as e:
@@ -103,8 +111,7 @@ async def post_init(application: Application) -> None:
         try:
             await application.bot.send_message(
                 chat_id=Config.SUPER_ADMIN_ID,
-                text=f"⚠️ **Warning:** Bot cannot send messages to admin group `{Config.ADMIN_GROUP_ID}`!\nMake sure bot is admin in that group.\n\nError: {str(e)}",
-                parse_mode='Markdown'
+                text=f"⚠️ Warning: Bot cannot send messages to admin group {Config.ADMIN_GROUP_ID}!\nMake sure bot is admin in that group.\n\nError: {str(e)}"
             )
         except Exception as e2:
             logger.error(f"Failed to notify super admin: {e2}")
@@ -112,14 +119,6 @@ async def post_init(application: Application) -> None:
 def main():
     """Start the bot."""
     try:
-        # Delete any existing webhook first
-        webhook_url = f"https://api.telegram.org/bot{Config.BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-        response = requests.post(webhook_url)
-        if response.status_code == 200:
-            logger.info("✅ Webhook deleted via direct API call")
-        else:
-            logger.warning(f"⚠️ Webhook deletion returned: {response.text}")
-        
         # Initialize database
         logger.info("Initializing database...")
         db = Database()
@@ -187,39 +186,68 @@ def main():
         # Group support command
         application.add_handler(CommandHandler('support', group_handlers.support))
         
-        # SUPER ADMIN COMMANDS - Group Management
+        # ==================== SUPER ADMIN COMMANDS ====================
+        
+        # Group Management
         application.add_handler(CommandHandler('activate', super_admin_handlers.activate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('deactivate', super_admin_handlers.deactivate_group, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listactivated', super_admin_handlers.list_activated_groups, filters=filters.ChatType.PRIVATE))
         
-        # SUPER ADMIN COMMANDS - Data Management
+        # Data Management
         application.add_handler(CommandHandler('deletedata', super_admin_handlers.delete_data, filters=filters.ChatType.PRIVATE))
         
-        # SUPER ADMIN COMMANDS - Custom Filters
+        # Custom Filters
         application.add_handler(CommandHandler('addfilter', super_admin_handlers.add_filter, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('removefilter', super_admin_handlers.remove_filter, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listfilters', super_admin_handlers.list_filters, filters=filters.ChatType.PRIVATE))
         
-        # SUPER ADMIN COMMANDS - User Broadcast
+        # User Broadcast (Original)
         application.add_handler(CommandHandler('broadcast', super_admin_handlers.broadcast, filters=filters.ChatType.PRIVATE))
         
-        # SUPER ADMIN COMMANDS - Group Broadcast (NEW)
+        # Group Broadcast
         application.add_handler(CommandHandler('broadcast_groups', super_admin_handlers.broadcast_groups, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('broadcast_group', super_admin_handlers.broadcast_group, filters=filters.ChatType.PRIVATE))
         
-        # SUPER ADMIN COMMANDS - Channel Broadcast (NEW)
+        # Channel Broadcast
         application.add_handler(CommandHandler('broadcast_channels', super_admin_handlers.broadcast_channels, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('broadcast_channel', super_admin_handlers.broadcast_channel, filters=filters.ChatType.PRIVATE))
-        
-        # SUPER ADMIN COMMANDS - Channel Management (NEW)
         application.add_handler(CommandHandler('addchannel', super_admin_handlers.add_channel, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('removechannel', super_admin_handlers.remove_channel, filters=filters.ChatType.PRIVATE))
         application.add_handler(CommandHandler('listchannels', super_admin_handlers.list_channels, filters=filters.ChatType.PRIVATE))
         
-        # SUPER ADMIN COMMANDS - Statistics
+        # Statistics
         application.add_handler(CommandHandler('allstats', super_admin_handlers.all_stats, filters=filters.ChatType.PRIVATE))
         
-        # Custom commands handler (must be last - low priority)
+        # ==================== LANGUAGE-BASED BROADCAST COMMANDS (NEW) ====================
+        
+        # Language broadcast menu
+        application.add_handler(CommandHandler('broadcast_lang', super_admin_handlers.broadcast_language_menu, filters=filters.ChatType.PRIVATE))
+        
+        # Language broadcast callbacks
+        application.add_handler(CallbackQueryHandler(super_admin_handlers.broadcast_language_selected, pattern='^broadcast_lang_'))
+        application.add_handler(CallbackQueryHandler(super_admin_handlers.broadcast_language_selected, pattern='^broadcast_cancel$'))
+        
+        # Process language broadcast messages (low priority group)
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            super_admin_handlers.process_language_broadcast
+        ), group=998)
+        
+        # Language-specific broadcast commands
+        application.add_handler(CommandHandler('en', super_admin_handlers.broadcast_en, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('de', super_admin_handlers.broadcast_de, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('hu', super_admin_handlers.broadcast_hu, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('es', super_admin_handlers.broadcast_es, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('fr', super_admin_handlers.broadcast_fr, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('it', super_admin_handlers.broadcast_it, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('pt', super_admin_handlers.broadcast_pt, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('ru', super_admin_handlers.broadcast_ru, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('ar', super_admin_handlers.broadcast_ar, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('zh', super_admin_handlers.broadcast_zh, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('ja', super_admin_handlers.broadcast_ja, filters=filters.ChatType.PRIVATE))
+        application.add_handler(CommandHandler('hi', super_admin_handlers.broadcast_hi, filters=filters.ChatType.PRIVATE))
+        
+        # Custom commands handler (must be last - lowest priority)
         application.add_handler(MessageHandler(
             filters.COMMAND & filters.ChatType.PRIVATE,
             custom_handler.handle
@@ -232,18 +260,6 @@ def main():
     except Exception as e:
         logger.error(f"Fatal error starting bot: {e}")
         logger.error(traceback.format_exc())
-        # Try to notify super admin via raw request
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": Config.SUPER_ADMIN_ID,
-                    "text": f"🚨 **FATAL BOT ERROR** 🚨\n\nBot failed to start!\nError: {str(e)}\n\nTraceback:\n`{traceback.format_exc()[:500]}`",
-                    "parse_mode": "Markdown"
-                }
-            )
-        except:
-            pass
         raise
 
 if __name__ == '__main__':
