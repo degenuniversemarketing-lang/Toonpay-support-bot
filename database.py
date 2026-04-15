@@ -1257,3 +1257,64 @@ class Database:
         finally:
             if cursor:
                 cursor.close()
+
+def get_language_statistics(self):
+    """Get count of users by language"""
+    if not self.conn:
+        logger.error("No database connection for get_language_statistics")
+        return {}
+    
+    cursor = None
+    try:
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT language, COUNT(*) as count 
+            FROM users 
+            GROUP BY language
+        ''')
+        results = cursor.fetchall()
+        return {row[0]: row[1] for row in results}
+    except Exception as e:
+        logger.error(f"Error getting language statistics: {e}")
+        return {}
+    finally:
+        if cursor:
+            cursor.close()
+
+def get_users_by_language(self, language):
+    """Get all users with a specific language"""
+    if not self.conn:
+        logger.error("No database connection for get_users_by_language")
+        return []
+    
+    cursor = None
+    try:
+        cursor = self.conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute('SELECT user_id FROM users WHERE language = %s', (language,))
+        users = cursor.fetchall()
+        return users
+    except Exception as e:
+        logger.error(f"Error getting users by language {language}: {e}")
+        return []
+    finally:
+        if cursor:
+            cursor.close()
+
+def get_user_count_by_language(self, language):
+    """Get count of users with a specific language"""
+    if not self.conn:
+        logger.error("No database connection for get_user_count_by_language")
+        return 0
+    
+    cursor = None
+    try:
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM users WHERE language = %s', (language,))
+        result = cursor.fetchone()
+        return result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting user count by language {language}: {e}")
+        return 0
+    finally:
+        if cursor:
+            cursor.close()
